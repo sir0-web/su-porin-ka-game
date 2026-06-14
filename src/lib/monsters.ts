@@ -3,6 +3,9 @@ export interface MonsterDef {
   name: string;
   icon: string;
   imageSrc: string;
+  // Optional sprite cleanup (applied in buildSprite):
+  keepLargest?: boolean;                       // keep only the main body, drop detached bits
+  erase?: [number, number, number][];          // erase circles [nx, ny, nr] (normalized to width)
   radius: number;
   color: string;
   highlightColor: string;
@@ -80,6 +83,8 @@ export const MONSTERS: MonsterDef[] = [
     name: 'マリンスフィア',
     icon: '海',
     imageSrc: '/marinesphere.png',
+    keepLargest: true,
+    erase: [[0.04, 0.37, 0.10], [0.95, 0.34, 0.10]], // remove side bubble "wings"
     radius: 57,
     color: '#1080ff',
     highlightColor: '#60b0ff',

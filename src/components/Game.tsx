@@ -91,7 +91,48 @@ interface Sprite {
 // character's dark, saturated outline acts as a natural wall, so
 // the body and its interior highlights are preserved. The alpha
 // channel is then lightly blurred for a soft, feathered edge.
-function buildSprite(img: HTMLImageElement): Sprite | null {
+// Keep only the largest opaque connected component (drops detached
+// bits such as stray bubbles / specks).
+function keepLargestComponent(d: Uint8ClampedArray, w: number, h: number) {
+  const lbl = new Int32Array(w * h).fill(-1);
+  let best = -1, bestArea = 0;
+  for (let s = 0; s < w * h; s++) {
+    if (d[s * 4 + 3] < 40 || lbl[s] !== -1) continue;
+    const labelId = s; // use the seed index as this component's label
+    const stack: number[] = [s];
+    lbl[s] = labelId;
+    let area = 0;
+    while (stack.length) {
+      const p = stack.pop()!;
+      area++;
+      const px = p % w, py = (p / w) | 0;
+      if (px > 0 && lbl[p - 1] === -1 && d[(p - 1) * 4 + 3] >= 40) { lbl[p - 1] = labelId; stack.push(p - 1); }
+      if (px < w - 1 && lbl[p + 1] === -1 && d[(p + 1) * 4 + 3] >= 40) { lbl[p + 1] = labelId; stack.push(p + 1); }
+      if (py > 0 && lbl[p - w] === -1 && d[(p - w) * 4 + 3] >= 40) { lbl[p - w] = labelId; stack.push(p - w); }
+      if (py < h - 1 && lbl[p + w] === -1 && d[(p + w) * 4 + 3] >= 40) { lbl[p + w] = labelId; stack.push(p + w); }
+    }
+    if (area > bestArea) { bestArea = area; best = labelId; }
+  }
+  for (let p = 0; p < w * h; p++) if (lbl[p] !== best) d[p * 4 + 3] = 0;
+}
+
+function eraseCircles(d: Uint8ClampedArray, w: number, h: number, circles: [number, number, number][]) {
+  for (const [nx, ny, nr] of circles) {
+    const ccx = nx * w, ccy = ny * h, rr = nr * w, rr2 = rr * rr;
+    const x0 = Math.max(0, (ccx - rr) | 0), x1 = Math.min(w - 1, (ccx + rr) | 0);
+    const y0 = Math.max(0, (ccy - rr) | 0), y1 = Math.min(h - 1, (ccy + rr) | 0);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - ccx, dy = y - ccy;
+        if (dx * dx + dy * dy <= rr2) d[(y * w + x) * 4 + 3] = 0;
+      }
+    }
+  }
+}
+
+interface SpriteOpts { keepLargest?: boolean; erase?: [number, number, number][]; }
+
+function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | null {
   const MAXD = 300;
   const ow = img.naturalWidth, oh = img.naturalHeight;
   if (!ow || !oh) return null;
@@ -155,6 +196,13 @@ function buildSprite(img: HTMLImageElement): Sprite | null {
       if (py > 0 && !visited[p - w]) stack.push(p - w);
       if (py < h - 1 && !visited[p + w]) stack.push(p + w);
     }
+  }
+
+  // Per-monster cleanup: drop detached bits, erase specific regions
+  if (opts.keepLargest) keepLargestComponent(d, w, h);
+  if (opts.erase) {
+    eraseCircles(d, w, h, opts.erase);
+    if (opts.keepLargest) keepLargestComponent(d, w, h);
   }
 
   // Feather: 3×3 blur of the alpha channel for soft, natural edges
@@ -606,10 +654,10 @@ export default function Game() {
     const engine = engineRef.current as import('matter-js').Engine;
     const m = MONSTERS[level];
     const body = Matter.Bodies.circle(x, y, m.radius, {
-      restitution: 0.28,
-      friction: 0.45,
-      frictionStatic: 0.6,
-      frictionAir: 0.006,
+      restitution: 0.15,
+      friction: 0.4,
+      frictionStatic: 0.55,
+      frictionAir: 0.012,
       density: 0.002,
       label: `monster_${level}`,
     });
@@ -658,7 +706,7 @@ export default function Game() {
           x: (bodyA.velocity.x + bodyB.velocity.x) * 0.3,
           y: -2.5,
         });
-        Matter.Body.setAngularVelocity(newBody, (bodyA.angle - bodyB.angle) * 0.1 + (Math.random() - 0.5) * 0.1);
+        Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
         gs.current.score += MONSTERS[nextLevel].score;
       }
 
@@ -681,8 +729,8 @@ export default function Game() {
     const r    = MONSTERS[st.currentLevel].radius;
     const clX  = Math.max(GL + r + 2, Math.min(GR - r - 2, st.dropX));
     const body = spawnMonster(Matter, clX, DROP_Y, st.currentLevel);
-    // slight initial spin so it tumbles naturally on landing
-    Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
+    // very slight initial spin; natural rolling comes from friction
+    Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.03);
 
     st.currentLevel = st.nextLevel;
     st.nextLevel    = getRandomStartLevel();
@@ -748,6 +796,20 @@ export default function Game() {
       last = ts;
       Matter.Engine.update(engine, dt > 0 ? dt : 16);
 
+      // Safety clamp: stop any body from "flying away" (runaway
+      // velocity / spin from collision resolution)
+      const MAXV = 32, MAXW = 0.5;
+      for (const b of Matter.Composite.allBodies(engine.world)) {
+        if (b.isStatic) continue;
+        const sp = Math.hypot(b.velocity.x, b.velocity.y);
+        if (sp > MAXV) {
+          Matter.Body.setVelocity(b, { x: (b.velocity.x / sp) * MAXV, y: (b.velocity.y / sp) * MAXV });
+        }
+        if (b.angularVelocity > MAXW || b.angularVelocity < -MAXW) {
+          Matter.Body.setAngularVelocity(b, Math.max(-MAXW, Math.min(MAXW, b.angularVelocity)));
+        }
+      }
+
       const s = gs.current;
 
       // Game over detection: settled body above ceiling
@@ -802,7 +864,7 @@ export default function Game() {
       const img = new Image();
       img.onload = () => {
         try {
-          const sp = buildSprite(img);
+          const sp = buildSprite(img, { keepLargest: m.keepLargest, erase: m.erase });
           if (sp) procRef.current.set(m.id, sp);
         } catch { /* keep gradient fallback */ }
       };
