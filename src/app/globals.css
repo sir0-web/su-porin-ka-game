@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #060612;
+  --gold: #c8a030;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: #f0e0b0;
+  font-family: "Noto Sans JP", "Hiragino Kaku Gothic Pro", "Yu Gothic", sans-serif;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Prevent pull-to-refresh on mobile */
+body { overscroll-behavior: none; }
+
+canvas { max-width: 100%; }
