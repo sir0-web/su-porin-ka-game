@@ -170,6 +170,7 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
   const CHROMA = 32;       // max channel spread to count as "grey"
   const BRIGHT = 168;      // min brightness for grey shadow / cream
   const isBg = (o: number): boolean => {
+    if (d[o + 3] < 16) return true; // already transparent (pre-cut PNG)
     const r = d[o], g = d[o + 1], b = d[o + 2];
     const dr = r - br, dg = g - bgc, db = b - bb;
     if (dr * dr + dg * dg + db * db <= CREAM2) return true;
@@ -254,6 +255,7 @@ export default function Game() {
   const coolRef       = useRef<number>(0);
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
+  const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -532,6 +534,159 @@ export default function Game() {
     ctx.restore();
   }, []);
 
+  // ── Trigger the "知らない人" grand-entrance cutscene ──────────
+  const triggerSecretFx = useCallback(() => {
+    const sparkles: { x: number; y: number; r: number; tw: number }[] = [];
+    for (let i = 0; i < 80; i++) {
+      sparkles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: 2.5 + Math.random() * 7,
+        tw: Math.random() * Math.PI * 2,
+      });
+    }
+    secretFxRef.current = { start: Date.now(), sparkles };
+  }, []);
+
+  // 4-pointed sparkle star path
+  const star4 = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, R: number) => {
+    const ri = R * 0.34;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const ang = (Math.PI / 4) * i - Math.PI / 2;
+      const rad = i % 2 === 0 ? R : ri;
+      const px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }, []);
+
+  // ── Draw the cutscene overlay (sparkles + RPG text) ─────────
+  const drawSecretFx = useCallback((ctx: CanvasRenderingContext2D) => {
+    const fx = secretFxRef.current;
+    if (!fx) return;
+    const DUR = 4800;
+    const e = Date.now() - fx.start;
+    if (e >= DUR) { secretFxRef.current = null; return; }
+
+    const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    // overall envelope (fade in / out)
+    const env = e < 300 ? e / 300 : e > DUR - 900 ? (DUR - e) / 900 : 1;
+
+    ctx.save();
+
+    // 0. dark dramatic tint so sparkles pop
+    ctx.fillStyle = `rgba(8,4,24,${0.45 * env})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // 1. opening flash
+    if (e < 480) {
+      ctx.fillStyle = `rgba(255,242,210,${(1 - e / 480) * 0.85})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // 2. rotating golden light rays from the focal point
+    const fx0 = CX, fy0 = H * 0.42;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(fx0, fy0);
+    ctx.rotate(e * 0.0006);
+    ctx.globalAlpha = 0.16 * env;
+    const rays = 14;
+    for (let i = 0; i < rays; i++) {
+      ctx.rotate((Math.PI * 2) / rays);
+      const grd = ctx.createLinearGradient(0, 0, 0, -H);
+      grd.addColorStop(0, 'rgba(255,225,140,0.5)');
+      grd.addColorStop(1, 'rgba(255,225,140,0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.moveTo(-8, 0);
+      ctx.lineTo(8, 0);
+      ctx.lineTo(2, -H);
+      ctx.lineTo(-2, -H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 3. twinkling sparkles all over the screen
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of fx.sparkles) {
+      const tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(e * 0.009 + s.tw));
+      const R = s.r * tw;
+      ctx.globalAlpha = env * tw;
+      ctx.shadowColor = 'rgba(255,225,150,0.9)';
+      ctx.shadowBlur = R * 2;
+      ctx.fillStyle = '#fff6da';
+      star4(ctx, s.x, s.y, R);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 4. RPG message: 「知らない人が現れた！」
+    {
+      const le = e - 150;
+      let a1 = 0, sc1 = 1;
+      if (le >= 0) {
+        if (le < 500) { a1 = le / 500; sc1 = 0.6 + 0.52 * (le / 500); }
+        else if (le < 680) { a1 = 1; sc1 = 1.12 - 0.12 * ((le - 500) / 180); }
+        else if (le < 2700) { a1 = 1; sc1 = 1; }
+        else if (le < 3300) { a1 = 1 - (le - 2700) / 600; sc1 = 1; }
+      }
+      if (a1 > 0) {
+        const ty = H * 0.4;
+        ctx.save();
+        ctx.globalAlpha = clamp01(a1);
+        ctx.translate(CX, ty);
+        ctx.scale(sc1, sc1);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 27px "Noto Serif JP", "Yu Mincho", serif';
+        // glow
+        ctx.shadowColor = 'rgba(180,90,255,0.9)';
+        ctx.shadowBlur = 22;
+        // gold gradient fill
+        const g = ctx.createLinearGradient(0, -18, 0, 18);
+        g.addColorStop(0, '#fff6d0');
+        g.addColorStop(0.5, '#ffdf70');
+        g.addColorStop(1, '#c8901f');
+        ctx.fillStyle = g;
+        ctx.strokeStyle = 'rgba(40,10,60,0.9)';
+        ctx.lineWidth = 4;
+        ctx.lineJoin = 'round';
+        ctx.strokeText('知らない人が現れた！', 0, 0);
+        ctx.fillText('知らない人が現れた！', 0, 0);
+        ctx.restore();
+      }
+    }
+
+    // 5. faint whisper: who are you ?
+    {
+      const le = e - 2500;
+      let a2 = 0;
+      if (le >= 0) {
+        if (le < 800) a2 = (le / 800) * 0.6;
+        else if (le < 1500) a2 = 0.6;
+        else if (le < 2300) a2 = 0.6 * (1 - (le - 1500) / 800);
+      }
+      if (a2 > 0) {
+        ctx.save();
+        ctx.globalAlpha = clamp01(a2);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'italic 22px "Noto Serif JP", Georgia, serif';
+        ctx.shadowColor = 'rgba(160,120,255,0.8)';
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = 'rgba(225,215,255,0.95)';
+        ctx.fillText('who are you ?', CX, H * 0.52);
+        ctx.restore();
+      }
+    }
+
+    ctx.restore();
+  }, [star4]);
+
   // ── Start screen ────────────────────────────────────────────
   const drawStart = useCallback((ctx: CanvasRenderingContext2D) => {
     ctx.fillStyle = 'rgba(4,4,20,0.88)';
@@ -748,6 +903,8 @@ export default function Game() {
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
         gs.current.score += MONSTERS[nextLevel].score;
+        // 知らない人 が初めて誕生した瞬間の演出
+        if (nextLevel === MAX_LEVEL) triggerSecretFx();
       }
 
       const s = gs.current;
@@ -756,7 +913,7 @@ export default function Game() {
         try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
       }
     }, 80);
-  }, [spawnMonster]);
+  }, [spawnMonster, triggerSecretFx]);
 
   // ── Drop current monster ────────────────────────────────────
   const drop = useCallback(() => {
@@ -891,12 +1048,13 @@ export default function Game() {
       }
 
       drawHUD(ctx, s);
+      drawSecretFx(ctx);
       if (s.phase === 'gameover') drawGameOver(ctx, s);
 
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawSecretFx, handleMerge]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {

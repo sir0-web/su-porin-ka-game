@@ -83,8 +83,6 @@ export const MONSTERS: MonsterDef[] = [
     name: 'マリンスフィア',
     icon: '海',
     imageSrc: '/marinesphere.png',
-    keepLargest: true,
-    erase: [[0.04, 0.37, 0.10], [0.95, 0.34, 0.10]], // remove side bubble "wings"
     radius: 57,
     color: '#1080ff',
     highlightColor: '#60b0ff',
