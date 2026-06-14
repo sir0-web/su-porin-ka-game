@@ -502,6 +502,36 @@ export default function Game() {
     }
   }, [drawMonster]);
 
+  // ── Secret monster (？) — black blurred orb with white question mark
+  const drawMystery = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, r: number) => {
+    ctx.save();
+    // soft black blurred orb
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowBlur  = r * 0.9;
+    const g = ctx.createRadialGradient(x - r * 0.25, y - r * 0.3, r * 0.1, x, y, r);
+    g.addColorStop(0, '#2a2440');
+    g.addColorStop(0.7, '#0a0814');
+    g.addColorStop(1, '#000');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // faint purple mystic rim
+    ctx.strokeStyle = 'rgba(150,70,255,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // white "？"
+    ctx.shadowColor = 'rgba(160,90,255,0.9)';
+    ctx.shadowBlur  = r * 0.35;
+    ctx.fillStyle   = '#ffffff';
+    ctx.font = `bold ${Math.max(10, r * 1.15)}px "Noto Sans JP", sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('？', x, y + r * 0.04);
+    ctx.restore();
+  }, []);
+
   // ── Start screen ────────────────────────────────────────────
   const drawStart = useCallback((ctx: CanvasRenderingContext2D) => {
     ctx.fillStyle = 'rgba(4,4,20,0.88)';
@@ -564,24 +594,34 @@ export default function Game() {
     ctx.font = '9px "Noto Sans JP", sans-serif';
     ctx.textBaseline = 'top';
     ctx.fillText('— 進化ルート —', CX, preY);
-    const shown = [0, 1, 2, 4, 6, 8, 10];
+    // Full evolution route — all 11 monsters, last one is a secret.
+    const shown = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const n = shown.length;
+    const x0 = 20, x1 = W - 20;
+    const stepX = (x1 - x0) / (n - 1);
+    const pr = 13; // preview radius
     shown.forEach((lvl, i) => {
-      const px = 26 + i * 50;
-      const pr = Math.min(MONSTERS[lvl].radius, 17);
-      const sc = pr / MONSTERS[lvl].radius;
-      ctx.save();
-      ctx.translate(px, preY + 30);
-      ctx.scale(sc, sc);
-      drawMonster(ctx, 0, 0, lvl, 0.9);
-      ctx.restore();
-      if (i < shown.length - 1) {
+      const px = x0 + i * stepX;
+      const py = preY + 32;
+      if (lvl === MAX_LEVEL) {
+        drawMystery(ctx, px, py, pr);
+      } else {
+        const sc = pr / MONSTERS[lvl].radius;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.scale(sc, sc);
+        drawMonster(ctx, 0, 0, lvl, 0.95);
+        ctx.restore();
+      }
+      if (i < n - 1) {
         ctx.fillStyle = P.gold;
-        ctx.font = 'bold 10px sans-serif';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('›', px + 24, preY + 30);
+        ctx.fillText('›', px + stepX / 2, py);
       }
     });
-  }, [diamond, drawMonster]);
+  }, [diamond, drawMonster, drawMystery]);
 
   // ── Game over screen ────────────────────────────────────────
   const drawGameOver = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
