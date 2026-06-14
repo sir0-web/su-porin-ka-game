@@ -84,10 +84,13 @@ interface Sprite {
   bx: number; by: number; bw: number; bh: number; // opaque bounding box
 }
 
-// Remove the light cream background by flood-filling from the
-// borders inward; the character's dark outline acts as a natural
-// wall, so interior highlights are preserved. Edges are feathered
-// for a soft, natural blend.
+// Remove the light cream background AND the grey ground-shadow by
+// flood-filling from the borders inward. A pixel counts as
+// background when it is close to the cream colour, OR it is
+// low-chroma and bright (the soft grey drop-shadow). The
+// character's dark, saturated outline acts as a natural wall, so
+// the body and its interior highlights are preserved. The alpha
+// channel is then lightly blurred for a soft, feathered edge.
 function buildSprite(img: HTMLImageElement): Sprite | null {
   const MAXD = 300;
   const ow = img.naturalWidth, oh = img.naturalHeight;
@@ -121,7 +124,19 @@ function buildSprite(img: HTMLImageElement): Sprite | null {
   }
   br /= cnt; bgc /= cnt; bb /= cnt;
 
-  const tol = 54, tol2 = tol * tol, soft = 104, span = soft - tol;
+  // Background predicate: cream-close OR (low-chroma AND bright)
+  const CREAM2 = 54 * 54;  // cream colour tolerance²
+  const CHROMA = 32;       // max channel spread to count as "grey"
+  const BRIGHT = 168;      // min brightness for grey shadow / cream
+  const isBg = (o: number): boolean => {
+    const r = d[o], g = d[o + 1], b = d[o + 2];
+    const dr = r - br, dg = g - bgc, db = b - bb;
+    if (dr * dr + dg * dg + db * db <= CREAM2) return true;
+    const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    return mx - mn <= CHROMA && mx >= BRIGHT;
+  };
+
   const visited = new Uint8Array(w * h);
   const stack: number[] = [];
   for (let x = 0; x < w; x++) { stack.push(x); stack.push((h - 1) * w + x); }
@@ -132,20 +147,32 @@ function buildSprite(img: HTMLImageElement): Sprite | null {
     if (visited[p]) continue;
     visited[p] = 1;
     const o = p * 4;
-    const dr = d[o] - br, dg = d[o + 1] - bgc, db = d[o + 2] - bb;
-    const dd = dr * dr + dg * dg + db * db;
-    if (dd <= tol2) {
+    if (isBg(o)) {
       d[o + 3] = 0;
       const px = p % w, py = (p / w) | 0;
       if (px > 0 && !visited[p - 1]) stack.push(p - 1);
       if (px < w - 1 && !visited[p + 1]) stack.push(p + 1);
       if (py > 0 && !visited[p - w]) stack.push(p - w);
       if (py < h - 1 && !visited[p + w]) stack.push(p + w);
-    } else if (dd <= soft * soft) {
-      // feathered edge — partial transparency, acts as a wall
-      const t = (Math.sqrt(dd) - tol) / span;
-      const na = (255 * t) | 0;
-      if (na < d[o + 3]) d[o + 3] = na;
+    }
+  }
+
+  // Feather: 3×3 blur of the alpha channel for soft, natural edges
+  const a0 = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) a0[p] = d[p * 4 + 3];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          sum += a0[yy * w + xx]; n++;
+        }
+      }
+      d[(y * w + x) * 4 + 3] = (sum / n) | 0;
     }
   }
   cx.putImageData(id, 0, 0);
@@ -154,7 +181,7 @@ function buildSprite(img: HTMLImageElement): Sprite | null {
   let minx = w, miny = h, maxx = 0, maxy = 0, any = false;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (d[(y * w + x) * 4 + 3] > 18) {
+      if (d[(y * w + x) * 4 + 3] > 24) {
         any = true;
         if (x < minx) minx = x; if (x > maxx) maxx = x;
         if (y < miny) miny = y; if (y > maxy) maxy = y;
@@ -212,6 +239,7 @@ export default function Game() {
     x: number, y: number,
     level: number,
     alpha = 1,
+    angle = 0,
   ) => {
     const m    = MONSTERS[level];
     const r    = m.radius;
@@ -222,7 +250,7 @@ export default function Game() {
 
     if (proc) {
       // ── 透過スプライト描画モード ──────────────────────────
-      // 1. モンスターカラーのソフトグロー（円の外周に滲ませる）
+      // 1. モンスターカラーのソフトグロー（回転しない＝対称なので円のまま）
       const halo = ctx.createRadialGradient(x, y, r * 0.52, x, y, r * 1.2);
       halo.addColorStop(0,    hexA(m.glowColor, 0.42));
       halo.addColorStop(0.62, hexA(m.glowColor, 0.16));
@@ -232,14 +260,16 @@ export default function Game() {
       ctx.arc(x, y, r * 1.2, 0, Math.PI * 2);
       ctx.fill();
 
-      // 2. cover スケールでキャラ本体が円を満たすように拡大
-      //    （顔以外のはみ出しは許容）
+      // 2. cover スケールでキャラ本体が円を満たすように拡大し、
+      //    物理ボディの角度で回転（転がる動き）
       const s   = (2 * r) / Math.min(proc.bw, proc.bh) * 1.05;
       const dw  = proc.canvas.width  * s;
       const dh  = proc.canvas.height * s;
       const bcx = (proc.bx + proc.bw / 2) * s;
       const bcy = (proc.by + proc.bh / 2) * s;
-      ctx.drawImage(proc.canvas, x - bcx, y - bcy, dw, dh);
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.drawImage(proc.canvas, -bcx, -bcy, dw, dh);
 
     } else {
       // ── フォールバック: グラデーション + 漢字 ────────────
@@ -576,9 +606,10 @@ export default function Game() {
     const engine = engineRef.current as import('matter-js').Engine;
     const m = MONSTERS[level];
     const body = Matter.Bodies.circle(x, y, m.radius, {
-      restitution: 0.3,
-      friction: 0.5,
-      frictionAir: 0.012,
+      restitution: 0.28,
+      friction: 0.45,
+      frictionStatic: 0.6,
+      frictionAir: 0.006,
       density: 0.002,
       label: `monster_${level}`,
     });
@@ -627,6 +658,7 @@ export default function Game() {
           x: (bodyA.velocity.x + bodyB.velocity.x) * 0.3,
           y: -2.5,
         });
+        Matter.Body.setAngularVelocity(newBody, (bodyA.angle - bodyB.angle) * 0.1 + (Math.random() - 0.5) * 0.1);
         gs.current.score += MONSTERS[nextLevel].score;
       }
 
@@ -648,7 +680,9 @@ export default function Game() {
 
     const r    = MONSTERS[st.currentLevel].radius;
     const clX  = Math.max(GL + r + 2, Math.min(GR - r - 2, st.dropX));
-    spawnMonster(Matter, clX, DROP_Y, st.currentLevel);
+    const body = spawnMonster(Matter, clX, DROP_Y, st.currentLevel);
+    // slight initial spin so it tumbles naturally on landing
+    Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
 
     st.currentLevel = st.nextLevel;
     st.nextLevel    = getRandomStartLevel();
@@ -751,7 +785,7 @@ export default function Game() {
         if (b.isStatic) continue;
         const d = bodyDataRef.current.get(b.id);
         if (!d) continue;
-        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1);
+        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle);
       }
 
       drawHUD(ctx, s);
