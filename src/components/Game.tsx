@@ -70,6 +70,102 @@ function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h
   ctx.closePath();
 }
 
+// ─── hex → rgba() ─────────────────────────────────────────────
+function hexA(hex: string, a: number): string {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// ─── Processed (background-removed) sprite ────────────────────
+interface Sprite {
+  canvas: HTMLCanvasElement;
+  bx: number; by: number; bw: number; bh: number; // opaque bounding box
+}
+
+// Remove the light cream background by flood-filling from the
+// borders inward; the character's dark outline acts as a natural
+// wall, so interior highlights are preserved. Edges are feathered
+// for a soft, natural blend.
+function buildSprite(img: HTMLImageElement): Sprite | null {
+  const MAXD = 300;
+  const ow = img.naturalWidth, oh = img.naturalHeight;
+  if (!ow || !oh) return null;
+  const sc = Math.min(1, MAXD / Math.max(ow, oh));
+  const w = Math.max(1, Math.round(ow * sc));
+  const h = Math.max(1, Math.round(oh * sc));
+
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  if (!cx) return null;
+  cx.drawImage(img, 0, 0, w, h);
+
+  const id = cx.getImageData(0, 0, w, h);
+  const d = id.data;
+
+  // Reference background colour = average of the 4 corners
+  let br = 0, bgc = 0, bb = 0, cnt = 0;
+  const S = 6;
+  const corners = [[0, 0, 1, 1], [w - 1, 0, -1, 1], [0, h - 1, 1, -1], [w - 1, h - 1, -1, -1]];
+  for (const [ox, oy, sx, sy] of corners) {
+    for (let yy = 0; yy < S; yy++) {
+      for (let xx = 0; xx < S; xx++) {
+        const px = Math.min(w - 1, Math.max(0, ox + sx * xx));
+        const py = Math.min(h - 1, Math.max(0, oy + sy * yy));
+        const o = (py * w + px) * 4;
+        br += d[o]; bgc += d[o + 1]; bb += d[o + 2]; cnt++;
+      }
+    }
+  }
+  br /= cnt; bgc /= cnt; bb /= cnt;
+
+  const tol = 54, tol2 = tol * tol, soft = 104, span = soft - tol;
+  const visited = new Uint8Array(w * h);
+  const stack: number[] = [];
+  for (let x = 0; x < w; x++) { stack.push(x); stack.push((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { stack.push(y * w); stack.push(y * w + w - 1); }
+
+  while (stack.length) {
+    const p = stack.pop()!;
+    if (visited[p]) continue;
+    visited[p] = 1;
+    const o = p * 4;
+    const dr = d[o] - br, dg = d[o + 1] - bgc, db = d[o + 2] - bb;
+    const dd = dr * dr + dg * dg + db * db;
+    if (dd <= tol2) {
+      d[o + 3] = 0;
+      const px = p % w, py = (p / w) | 0;
+      if (px > 0 && !visited[p - 1]) stack.push(p - 1);
+      if (px < w - 1 && !visited[p + 1]) stack.push(p + 1);
+      if (py > 0 && !visited[p - w]) stack.push(p - w);
+      if (py < h - 1 && !visited[p + w]) stack.push(p + w);
+    } else if (dd <= soft * soft) {
+      // feathered edge — partial transparency, acts as a wall
+      const t = (Math.sqrt(dd) - tol) / span;
+      const na = (255 * t) | 0;
+      if (na < d[o + 3]) d[o + 3] = na;
+    }
+  }
+  cx.putImageData(id, 0, 0);
+
+  // Opaque bounding box
+  let minx = w, miny = h, maxx = 0, maxy = 0, any = false;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (d[(y * w + x) * 4 + 3] > 18) {
+        any = true;
+        if (x < minx) minx = x; if (x > maxx) maxx = x;
+        if (y < miny) miny = y; if (y > maxy) maxy = y;
+      }
+    }
+  }
+  if (!any) { minx = 0; miny = 0; maxx = w - 1; maxy = h - 1; }
+
+  return { canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1 };
+}
+
 // ═══════════════════════════════════════════════════════════════
 export default function Game() {
   const canvasRef     = useRef<HTMLCanvasElement>(null);
@@ -82,6 +178,7 @@ export default function Game() {
   const scaleRef      = useRef<number>(1);
   const coolRef       = useRef<number>(0);
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
+  const procRef       = useRef<Map<number, Sprite>>(new Map());
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -116,55 +213,33 @@ export default function Game() {
     level: number,
     alpha = 1,
   ) => {
-    const m   = MONSTERS[level];
-    const r   = m.radius;
-    const img = imgsRef.current.get(level);
-    const hasImg = img != null && img.complete && img.naturalWidth > 0;
+    const m    = MONSTERS[level];
+    const r    = m.radius;
+    const proc = procRef.current.get(level);
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    if (hasImg) {
-      // ── 画像描画モード ──────────────────────────────────
-      // 1. 外側グロー
-      ctx.shadowColor = m.glowColor;
-      ctx.shadowBlur  = r * 0.7;
-      ctx.strokeStyle = m.glowColor;
-      ctx.lineWidth   = 3;
+    if (proc) {
+      // ── 透過スプライト描画モード ──────────────────────────
+      // 1. モンスターカラーのソフトグロー（円の外周に滲ませる）
+      const halo = ctx.createRadialGradient(x, y, r * 0.52, x, y, r * 1.2);
+      halo.addColorStop(0,    hexA(m.glowColor, 0.42));
+      halo.addColorStop(0.62, hexA(m.glowColor, 0.16));
+      halo.addColorStop(1,    hexA(m.glowColor, 0));
+      ctx.fillStyle = halo;
       ctx.beginPath();
-      ctx.arc(x, y, r + 1, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.arc(x, y, r * 1.2, 0, Math.PI * 2);
+      ctx.fill();
 
-      // 2. 円クリップ → 画像描画
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x, y, r - 1, 0, Math.PI * 2);
-      ctx.clip();
-
-      // 画像サイズ問わず円内に収まるよう contain スケール
-      const diam = (r - 1) * 2;
-      const ar   = img.naturalWidth / img.naturalHeight;
-      let dw: number, dh: number;
-      if (ar >= 1) { dw = diam; dh = diam / ar; }
-      else         { dh = diam; dw = diam * ar;  }
-      ctx.drawImage(img, x - dw / 2, y - dh / 2, dw, dh);
-
-      // 周縁をほんのり暗くしてゲームぽく
-      const vgr = ctx.createRadialGradient(x, y, r * 0.5, x, y, r);
-      vgr.addColorStop(0, 'rgba(0,0,0,0)');
-      vgr.addColorStop(1, 'rgba(0,0,0,0.38)');
-      ctx.fillStyle = vgr;
-      ctx.fillRect(x - r, y - r, r * 2, r * 2);
-
-      ctx.restore();
-
-      // 3. ゴールドボーダーリング
-      ctx.strokeStyle = m.borderColor;
-      ctx.lineWidth   = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.stroke();
+      // 2. cover スケールでキャラ本体が円を満たすように拡大
+      //    （顔以外のはみ出しは許容）
+      const s   = (2 * r) / Math.min(proc.bw, proc.bh) * 1.05;
+      const dw  = proc.canvas.width  * s;
+      const dh  = proc.canvas.height * s;
+      const bcx = (proc.bx + proc.bw / 2) * s;
+      const bcy = (proc.by + proc.bh / 2) * s;
+      ctx.drawImage(proc.canvas, x - bcx, y - bcy, dw, dh);
 
     } else {
       // ── フォールバック: グラデーション + 漢字 ────────────
@@ -687,10 +762,16 @@ export default function Game() {
     rafRef.current = requestAnimationFrame(loop);
   }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, handleMerge]);
 
-  // ── Preload monster images ──────────────────────────────────
+  // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
     MONSTERS.forEach((m) => {
       const img = new Image();
+      img.onload = () => {
+        try {
+          const sp = buildSprite(img);
+          if (sp) procRef.current.set(m.id, sp);
+        } catch { /* keep gradient fallback */ }
+      };
       img.src = m.imageSrc;
       imgsRef.current.set(m.id, img);
     });
