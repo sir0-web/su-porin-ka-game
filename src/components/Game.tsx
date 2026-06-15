@@ -53,7 +53,43 @@ interface GS {
   dropX: number;
   canDrop: boolean;
   gameOverFrames: number;
+  maxLevel: number;       // highest monster level reached this game
 }
+
+interface RankEntry { name: string; score: number; maxLevel: number; }
+
+const RANK_KEY = 'sporinkaRanking';
+const RANK_MAX = 10;
+
+function loadRanking(): RankEntry[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(RANK_KEY) ?? '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+function saveRanking(r: RankEntry[]) {
+  try { localStorage.setItem(RANK_KEY, JSON.stringify(r)); } catch { /* */ }
+}
+// Insert an entry, sort by score desc, keep top RANK_MAX. Returns
+// the new list and the index of the inserted entry (-1 if dropped).
+function insertRanking(entry: RankEntry): { list: RankEntry[]; index: number } {
+  const list = loadRanking();
+  list.push(entry);
+  list.sort((a, b) => b.score - a.score);
+  const trimmed = list.slice(0, RANK_MAX);
+  saveRanking(trimmed);
+  const index = trimmed.findIndex((e) => e === entry);
+  return { list: trimmed, index };
+}
+
+// Display name for an evolution level — the secret monster is masked
+function evoName(lvl: number): string {
+  return lvl >= MAX_LEVEL ? '？？？' : MONSTERS[lvl].name;
+}
+
+// Shared button rects (keep draw + hit-test in sync)
+const START_BTN = { w: 184, h: 46, x: CX - 92, y: 300 };
+const GO_BTN = { w: 184, h: 46, x: CX - 92, y: 560 };
 
 // ─── Rounded rect path ────────────────────────────────────────
 function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -256,6 +292,9 @@ export default function Game() {
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
+  const rankingRef    = useRef<RankEntry[]>([]);
+  const lastRankIdxRef = useRef<number>(-1);
+  const playerNameRef = useRef<string>('');
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -266,9 +305,14 @@ export default function Game() {
     dropX: CX,
     canDrop: false,
     gameOverFrames: 0,
+    maxLevel: 0,
   });
 
-  const [, forceRender] = useState(0);
+  const [uiPhase, setUiPhase] = useState<Phase>('start');
+  const [playerName, setPlayerName] = useState('');
+
+  // Load saved ranking once on mount
+  useEffect(() => { rankingRef.current = loadRanking(); }, []);
 
   // ── Diamond ornament ────────────────────────────────────────
   const diamond = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, s: number) => {
@@ -687,77 +731,129 @@ export default function Game() {
     ctx.restore();
   }, [star4]);
 
+  // ── Ranking list (shared by TOP and GAME OVER) ─────────────
+  const drawRanking = useCallback((
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, rowH: number, maxRows: number, highlightIdx: number,
+  ) => {
+    const rows = rankingRef.current.slice(0, maxRows);
+    if (rows.length === 0) {
+      ctx.fillStyle = P.textDim;
+      ctx.font = '10px "Noto Sans JP", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('まだ記録がありません', x + w / 2, y + rowH / 2);
+      return;
+    }
+    rows.forEach((e, i) => {
+      const ry = y + i * rowH;
+      const cy = ry + rowH / 2;
+      const hl = i === highlightIdx;
+      if (hl) {
+        ctx.fillStyle = 'rgba(255,210,80,0.18)';
+        rrect(ctx, x, ry + 1, w, rowH - 2, 4); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,210,80,0.5)'; ctx.lineWidth = 1;
+        rrect(ctx, x, ry + 1, w, rowH - 2, 4); ctx.stroke();
+      }
+      const medal = i === 0 ? '#ffd24a' : i === 1 ? '#cfd4dd' : i === 2 ? '#d8945a' : P.textDim;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = medal;
+      ctx.font = 'bold 13px "Oswald", "Arial Narrow", sans-serif';
+      ctx.fillText(String(i + 1), x + 8, cy);
+
+      ctx.fillStyle = hl ? '#fff3c0' : P.text;
+      ctx.font = '11px "Noto Sans JP", sans-serif';
+      const name = e.name.length > 7 ? e.name.slice(0, 7) + '…' : e.name;
+      ctx.fillText(name, x + 26, cy);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = P.goldBrt;
+      ctx.font = 'bold 14px "Oswald", "Arial Narrow", sans-serif';
+      ctx.fillText(String(e.score), x + w - 92, cy);
+
+      ctx.fillStyle = P.textDim;
+      ctx.font = '9px "Noto Sans JP", sans-serif';
+      const ev = evoName(e.maxLevel);
+      ctx.fillText(ev.length > 7 ? ev.slice(0, 7) : ev, x + w - 6, cy);
+    });
+  }, []);
+
   // ── Start screen ────────────────────────────────────────────
   const drawStart = useCallback((ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = 'rgba(4,4,20,0.88)';
+    ctx.fillStyle = 'rgba(4,4,20,0.9)';
     ctx.fillRect(0, 0, W, H);
 
-    const bx = 40, by = 130, bw = W - 80, bh = 190;
+    // Title panel
+    const bx = 40, by = 54, bw = W - 80, bh = 150;
     ctx.fillStyle = P.panel;
     rrect(ctx, bx, by, bw, bh, 10); ctx.fill();
     ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
     rrect(ctx, bx, by, bw, bh, 10); ctx.stroke();
-
-    diamond(ctx, bx,      by,      7);
-    diamond(ctx, bx + bw, by,      7);
-    diamond(ctx, bx,      by + bh, 7);
-    diamond(ctx, bx + bw, by + bh, 7);
+    diamond(ctx, bx, by, 7); diamond(ctx, bx + bw, by, 7);
+    diamond(ctx, bx, by + bh, 7); diamond(ctx, bx + bw, by + bh, 7);
 
     ctx.textAlign = 'center';
     ctx.fillStyle = P.gold;
     ctx.font = 'bold 11px "Noto Sans JP", serif';
     ctx.textBaseline = 'top';
-    ctx.fillText('～ Ragnarok Origin ～', CX, by + 16);
+    ctx.fillText('～ Ragnarok Origin ～', CX, by + 14);
 
     ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 20;
     ctx.fillStyle = P.goldBrt;
     ctx.font = 'bold 24px "Noto Serif JP", "Yu Mincho", serif';
-    ctx.fillText('スぽりんカゲーム', CX, by + 44);
+    ctx.fillText('スぽりんカゲーム', CX, by + 40);
     ctx.shadowBlur = 0;
 
     ctx.strokeStyle = P.gold; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
-    ctx.beginPath(); ctx.moveTo(bx+20, by+82); ctx.lineTo(bx+bw-20, by+82); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx + 20, by + 78); ctx.lineTo(bx + bw - 20, by + 78); ctx.stroke();
     ctx.globalAlpha = 1;
 
     ctx.fillStyle = P.text;
     ctx.font = '11px "Noto Sans JP", sans-serif';
-    ctx.fillText('同じモンスターを合体させて', CX, by + 94);
-    ctx.fillText('より強いモンスターへ進化させよう！', CX, by + 112);
+    ctx.fillText('同じモンスターを合体させて進化！', CX, by + 90);
     ctx.fillStyle = P.textDim;
     ctx.font = '10px "Noto Sans JP", sans-serif';
-    ctx.fillText('天井ラインを超えるとゲームオーバー', CX, by + 134);
-    ctx.fillText('「知らない人」同士が合体 → 消滅＆高得点！', CX, by + 152);
+    ctx.fillText('天井ラインを超えるとゲームオーバー', CX, by + 110);
+    ctx.fillText('「知らない人」同士が合体 → 消滅＆高得点！', CX, by + 128);
+
+    // Name field label (the actual <input> is an HTML overlay)
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 10px "Noto Sans JP", sans-serif';
+    ctx.textBaseline = 'top';
+    ctx.fillText('プレイヤー名（任意）', CX, 220);
 
     // Start button
-    const btnY = by + bh + 24, btnW = 180, btnH = 46, btnX = CX - btnW / 2;
-    const bg = ctx.createLinearGradient(btnX, btnY, btnX, btnY + btnH);
+    const b = START_BTN;
+    const bg = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
     bg.addColorStop(0, '#3a2a00'); bg.addColorStop(0.5, '#c8a030'); bg.addColorStop(1, '#3a2a00');
     ctx.fillStyle = bg;
-    rrect(ctx, btnX, btnY, btnW, btnH, 8); ctx.fill();
+    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill();
     ctx.strokeStyle = P.goldBrt; ctx.lineWidth = 1.5;
-    rrect(ctx, btnX, btnY, btnW, btnH, 8); ctx.stroke();
+    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.stroke();
     ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 12;
     ctx.fillStyle = '#fffadc';
     ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⚔  ゲームスタート  ⚔', CX, btnY + btnH / 2);
+    ctx.fillText('⚔  ゲームスタート  ⚔', CX, b.y + b.h / 2);
     ctx.shadowBlur = 0;
 
-    // Mini evolution preview
-    const preY = by + bh + 86;
+    // Evolution route — all 11 monsters, last one is a secret
+    const preY = 360;
     ctx.fillStyle = P.textDim;
     ctx.font = '9px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText('— 進化ルート —', CX, preY);
-    // Full evolution route — all 11 monsters, last one is a secret.
     const shown = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     const n = shown.length;
     const x0 = 20, x1 = W - 20;
     const stepX = (x1 - x0) / (n - 1);
-    const pr = 13; // preview radius
+    const pr = 13;
     shown.forEach((lvl, i) => {
       const px = x0 + i * stepX;
-      const py = preY + 32;
+      const py = preY + 30;
       if (lvl === MAX_LEVEL) {
         drawMystery(ctx, px, py, pr);
       } else {
@@ -776,69 +872,91 @@ export default function Game() {
         ctx.fillText('›', px + stepX / 2, py);
       }
     });
-  }, [diamond, drawMonster, drawMystery]);
+
+    // Ranking panel
+    const rx = 34, ry = 418, rw = W - 68, rh = 188;
+    ctx.fillStyle = P.panel;
+    rrect(ctx, rx, ry, rw, rh, 8); ctx.fill();
+    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
+    rrect(ctx, rx, ry, rw, rh, 8); ctx.stroke();
+    ctx.fillStyle = P.gold; rrect(ctx, rx, ry, rw, 3, 3); ctx.fill();
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🏆  ランキング  TOP5', rx + rw / 2, ry + 8);
+    drawRanking(ctx, rx + 6, ry + 26, rw - 12, 30, 5, -1);
+  }, [diamond, drawMonster, drawMystery, drawRanking]);
 
   // ── Game over screen ────────────────────────────────────────
   const drawGameOver = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
-    ctx.fillStyle = 'rgba(4,4,20,0.88)';
+    ctx.fillStyle = 'rgba(4,4,20,0.9)';
     ctx.fillRect(0, 0, W, H);
 
-    const bx = 50, by = 170, bw = W - 100, bh = 240;
+    const bx = 24, by = 38, bw = W - 48, bh = 584;
     ctx.fillStyle = P.panel;
-    rrect(ctx, bx, by, bw, bh, 10); ctx.fill();
+    rrect(ctx, bx, by, bw, bh, 12); ctx.fill();
     ctx.strokeStyle = '#800000'; ctx.lineWidth = 2;
-    rrect(ctx, bx, by, bw, bh, 10); ctx.stroke();
-
-    diamond(ctx, bx,      by,      7);
-    diamond(ctx, bx + bw, by,      7);
-    diamond(ctx, bx,      by + bh, 7);
-    diamond(ctx, bx + bw, by + bh, 7);
+    rrect(ctx, bx, by, bw, bh, 12); ctx.stroke();
+    diamond(ctx, bx, by, 7); diamond(ctx, bx + bw, by, 7);
+    diamond(ctx, bx, by + bh, 7); diamond(ctx, bx + bw, by + bh, 7);
 
     ctx.textAlign = 'center';
     ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 18;
     ctx.fillStyle = '#ff5050';
-    ctx.font = 'bold 28px "Noto Serif JP", serif';
+    ctx.font = 'bold 27px "Noto Serif JP", serif';
     ctx.textBaseline = 'top';
-    ctx.fillText('GAME OVER', CX, by + 20);
+    ctx.fillText('GAME OVER', CX, by + 16);
     ctx.shadowBlur = 0;
 
-    ctx.strokeStyle = P.gold; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
-    ctx.beginPath(); ctx.moveTo(bx+20, by+66); ctx.lineTo(bx+bw-20, by+66); ctx.stroke();
-    ctx.globalAlpha = 1;
-
+    // Player name
+    const nm = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
     ctx.fillStyle = P.text;
     ctx.font = '11px "Noto Sans JP", sans-serif';
-    ctx.fillText('スコア', CX, by + 82);
+    ctx.fillText(`${nm} の きろく`, CX, by + 52);
 
+    // Score
     ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 10;
     ctx.fillStyle = P.goldBrt;
-    ctx.font = 'bold 40px "Oswald", "Arial Narrow", sans-serif';
-    ctx.fillText(String(st.score), CX, by + 100);
+    ctx.font = 'bold 38px "Oswald", "Arial Narrow", sans-serif';
+    ctx.fillText(String(st.score), CX, by + 70);
     ctx.shadowBlur = 0;
 
-    const isNew = st.score > 0 && st.score >= st.highScore;
+    const isNew = st.score > 0 && lastRankIdxRef.current === 0;
     ctx.fillStyle = isNew ? '#ff9050' : P.gold;
     ctx.font = isNew ? 'bold 11px "Noto Sans JP"' : '10px "Noto Sans JP"';
-    ctx.fillText(isNew ? '🎉  NEW RECORD!  🎉' : `ベスト: ${st.highScore}`, CX, by + 160);
+    ctx.fillText(isNew ? '🎉  NEW RECORD!  🎉' : `ベスト: ${st.highScore}`, CX, by + 118);
 
-    // Evolution progress display
+    // Max evolution reached (secret masked) — uses the real maxLevel
     ctx.fillStyle = P.textDim;
-    ctx.font = '9px "Noto Sans JP", sans-serif';
-    ctx.fillText('最大進化: ' + MONSTERS[Math.min(st.score > 0 ? 10 : 0, MAX_LEVEL)].name, CX, by + 185);
+    ctx.font = '10px "Noto Sans JP", sans-serif';
+    ctx.fillText('最大進化: ' + evoName(st.maxLevel), CX, by + 138);
+
+    // Divider
+    ctx.strokeStyle = P.gold; ctx.lineWidth = 1; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.moveTo(bx + 20, by + 162); ctx.lineTo(bx + bw - 20, by + 162); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Ranking
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+    ctx.fillText('🏆  ランキング  BEST10', CX, by + 172);
+    drawRanking(ctx, bx + 14, by + 192, bw - 28, 28, 8, lastRankIdxRef.current);
 
     // Retry button
-    const btnY = by + bh + 18, btnW = 180, btnH = 46, btnX = CX - btnW / 2;
-    const bg = ctx.createLinearGradient(btnX, btnY, btnX, btnY + btnH);
+    const b = GO_BTN;
+    const bg = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
     bg.addColorStop(0, '#1a0030'); bg.addColorStop(0.5, '#6030c0'); bg.addColorStop(1, '#1a0030');
     ctx.fillStyle = bg;
-    rrect(ctx, btnX, btnY, btnW, btnH, 8); ctx.fill();
+    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill();
     ctx.strokeStyle = '#a060ff'; ctx.lineWidth = 1.5;
-    rrect(ctx, btnX, btnY, btnW, btnH, 8); ctx.stroke();
+    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.stroke();
     ctx.fillStyle = '#f0e0ff';
     ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⚔  もう一度挑戦  ⚔', CX, btnY + btnH / 2);
-  }, [diamond]);
+    ctx.fillText('⚔  もう一度挑戦  ⚔', CX, b.y + b.h / 2);
+  }, [diamond, drawRanking]);
 
   // ── Spawn a monster body ────────────────────────────────────
   const spawnMonster = useCallback((
@@ -857,6 +975,7 @@ export default function Game() {
       label: `monster_${level}`,
     });
     bodyDataRef.current.set(body.id, { monsterId: level, createdAt: Date.now(), isMerging: false });
+    if (level > gs.current.maxLevel) gs.current.maxLevel = level;
     Matter.Composite.add(engine.world, body);
     return body;
   }, []);
@@ -961,8 +1080,10 @@ export default function Game() {
     st.dropX          = CX;
     st.canDrop        = true;
     st.gameOverFrames = 0;
+    st.maxLevel       = st.currentLevel;
     st.phase          = 'playing';
     coolRef.current   = 0;
+    secretFxRef.current = null;
 
     // Physics world
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
@@ -985,7 +1106,7 @@ export default function Game() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    forceRender(n => n + 1);
+    setUiPhase('playing');
 
     let last = 0;
     const loop = (ts: number) => {
@@ -1037,7 +1158,12 @@ export default function Game() {
             s.highScore = s.score;
             try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
           }
-          forceRender(n => n + 1);
+          // Record this run in the ranking
+          const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
+          const { list, index } = insertRanking({ name, score: s.score, maxLevel: s.maxLevel });
+          rankingRef.current = list;
+          lastRankIdxRef.current = index;
+          setUiPhase('gameover');
         }
       }
 
@@ -1165,17 +1291,16 @@ export default function Game() {
     const cy = (clientY - rect.top)  / s;
     const st = gs.current;
 
+    const inBtn = (b: { x: number; y: number; w: number; h: number }) =>
+      cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+
     if (st.phase === 'start') {
-      const btnW = 180, btnH = 46, btnX = CX - 90;
-      const btnY = 130 + 190 + 24;
-      if (cx >= btnX && cx <= btnX + btnW && cy >= btnY && cy <= btnY + btnH) {
+      if (inBtn(START_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
       }
     } else if (st.phase === 'gameover') {
-      const btnW = 180, btnH = 46, btnX = CX - 90;
-      const btnY = 170 + 240 + 18;
-      if (cx >= btnX && cx <= btnX + btnW && cy >= btnY && cy <= btnY + btnH) {
+      if (inBtn(GO_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
       }
@@ -1185,22 +1310,52 @@ export default function Game() {
   }, [initGame, drop]);
 
   return (
-    <div ref={wrapRef} style={{ display: 'flex', justifyContent: 'center' }}>
-      <canvas
-        ref={canvasRef}
-        width={W}
-        height={H}
-        style={{ display: 'block', cursor: 'crosshair', touchAction: 'none' }}
-        onClick={(e) => handleClick(e.clientX, e.clientY)}
-        onTouchEnd={(e) => {
-          e.preventDefault();
-          const t = e.changedTouches[0];
-          gs.current.dropX = Math.max(GL+5, Math.min(GR-5,
-            (t.clientX - (canvasRef.current?.getBoundingClientRect().left ?? 0)) / scaleRef.current
-          ));
-          handleClick(t.clientX, t.clientY);
-        }}
-      />
+    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
+      <div ref={wrapRef} style={{ position: 'relative', width: W, height: H }}>
+        <canvas
+          ref={canvasRef}
+          width={W}
+          height={H}
+          style={{ display: 'block', width: W, height: H, cursor: 'crosshair', touchAction: 'none' }}
+          onClick={(e) => handleClick(e.clientX, e.clientY)}
+          onTouchEnd={(e) => {
+            e.preventDefault();
+            const t = e.changedTouches[0];
+            gs.current.dropX = Math.max(GL + 5, Math.min(GR - 5,
+              (t.clientX - (canvasRef.current?.getBoundingClientRect().left ?? 0)) / scaleRef.current
+            ));
+            handleClick(t.clientX, t.clientY);
+          }}
+        />
+        {uiPhase === 'start' && (
+          <input
+            type="text"
+            value={playerName}
+            onChange={(e) => { setPlayerName(e.target.value); playerNameRef.current = e.target.value; }}
+            maxLength={10}
+            placeholder="なまえを入力"
+            aria-label="プレイヤー名"
+            style={{
+              position: 'absolute',
+              left: 90,
+              top: 238,
+              width: 220,
+              height: 32,
+              boxSizing: 'border-box',
+              padding: '0 10px',
+              background: 'rgba(10,10,30,0.92)',
+              border: '1.5px solid #c8a030',
+              borderRadius: 7,
+              color: '#ffe9b0',
+              textAlign: 'center',
+              fontSize: 16,
+              fontFamily: '"Noto Sans JP", sans-serif',
+              outline: 'none',
+              zIndex: 5,
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }
