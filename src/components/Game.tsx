@@ -389,6 +389,7 @@ export default function Game() {
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
   const viewingRef    = useRef<boolean>(false); // gazing at the final board
   const bgmRef              = useRef<HTMLAudioElement | null>(null);
+  const bgmGameoverRef      = useRef<HTMLAudioElement | null>(null);
   const seGattaiRef         = useRef<HTMLAudioElement | null>(null);
   const seShiranaihitoRef   = useRef<HTMLAudioElement | null>(null);
 
@@ -417,6 +418,10 @@ export default function Game() {
     bgm.loop = true;
     bgm.volume = 0.4;
     bgmRef.current = bgm;
+    const bgmGO = new Audio('/bgm/gameover.mp3');
+    bgmGO.loop = false;
+    bgmGO.volume = 0.5;
+    bgmGameoverRef.current = bgmGO;
     const se = new Audio('/se/gattai.wav');
     se.volume = 0.7;
     seGattaiRef.current = se;
@@ -1442,6 +1447,8 @@ export default function Game() {
     if (!ctx) return;
 
     setUiPhase('playing');
+    const goAudio = bgmGameoverRef.current;
+    if (goAudio) { goAudio.pause(); goAudio.currentTime = 0; }
     const bgm = bgmRef.current;
     if (bgm) { bgm.currentTime = 0; bgm.play().catch(() => {}); }
 
@@ -1495,6 +1502,8 @@ export default function Game() {
         if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
           s.phase = 'gameover';
           bgmRef.current?.pause();
+          const go = bgmGameoverRef.current;
+          if (go) { go.currentTime = 0; go.play().catch(() => {}); }
           if (s.score > s.highScore) {
             s.highScore = s.score;
             try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
