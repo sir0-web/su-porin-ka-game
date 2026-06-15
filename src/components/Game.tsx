@@ -930,38 +930,47 @@ export default function Game() {
     ctx.fillStyle = 'rgba(4,4,20,0.9)';
     ctx.fillRect(0, 0, W, H);
 
-    // Title — no frame, a single eerie line: 「知らない人」
+    // Title — light-novel style acrostic. The big red leading chars,
+    // read down the left column, spell スイガゲーム.
     {
-      const t = Date.now();
-      const flicker = 0.82 + 0.18 * Math.sin(t * 0.013) + (Math.random() < 0.06 ? -0.25 : 0);
-      const jitter = Math.sin(t * 0.04) * 0.6;
+      const lines: [string, string][] = [
+        ['ス', 'ごい'],
+        ['イ', 'きおいで'],
+        ['ガ', 'ったいさせたら最後に知らない人がでてきた唖然とした'],
+        ['ゲーム', ''],
+      ];
+      const x0 = 24, lh = 34, baseY = 64;
       ctx.save();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.globalAlpha = Math.max(0.5, Math.min(1, flicker));
-      ctx.font = 'bold 46px "Noto Serif JP", "Yu Mincho", serif';
-      const ty = 132 + jitter;
-      // blood-red glow
-      ctx.shadowColor = 'rgba(180,0,0,0.95)';
-      ctx.shadowBlur = 26;
-      // jagged dark outline
-      ctx.lineJoin = 'miter';
-      ctx.miterLimit = 2;
-      ctx.strokeStyle = '#1a0000';
-      ctx.lineWidth = 6;
-      ctx.strokeText('知らない人', CX, ty);
-      // blood-red gradient fill
-      const g = ctx.createLinearGradient(0, ty - 26, 0, ty + 26);
-      g.addColorStop(0, '#ff5a4a');
-      g.addColorStop(0.5, '#c40000');
-      g.addColorStop(1, '#5e0000');
-      ctx.fillStyle = g;
-      ctx.fillText('知らない人', CX, ty);
-      // faint inner highlight
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha *= 0.25;
-      ctx.fillStyle = '#ff9a8a';
-      ctx.fillText('知らない人', CX, ty - 1);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      lines.forEach(([red, white], i) => {
+        const by = baseY + i * lh;
+        let x = x0;
+        // big red leading character(s)
+        ctx.font = 'bold 27px "Noto Serif JP", "Yu Mincho", serif';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = 'rgba(40,0,0,0.85)';
+        ctx.shadowColor = 'rgba(220,0,0,0.85)';
+        ctx.shadowBlur = 12;
+        const rg = ctx.createLinearGradient(0, by - 24, 0, by + 4);
+        rg.addColorStop(0, '#ff6a5a');
+        rg.addColorStop(1, '#c00000');
+        ctx.strokeText(red, x, by);
+        ctx.fillStyle = rg;
+        ctx.fillText(red, x, by);
+        x += ctx.measureText(red).width + 2;
+        ctx.shadowBlur = 0;
+        // rest of the line in white
+        if (white) {
+          ctx.font = 'bold 12px "Noto Sans JP", sans-serif';
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillStyle = '#f4f4ff';
+          ctx.strokeText(white, x, by - 3);
+          ctx.fillText(white, x, by - 3);
+        }
+      });
       ctx.restore();
     }
 
@@ -1143,7 +1152,7 @@ export default function Game() {
     octx.drawImage(snap, 0, 0);
     // Unobtrusive watermark: name + score, bottom-left, semi-transparent
     const nm = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-    const label = `${nm}  ${gs.current.score} pts  ｜ 知らない人`;
+    const label = `${nm}  ${gs.current.score} pts  ｜ スイガゲーム`;
     octx.font = 'bold 11px "Noto Sans JP", sans-serif';
     octx.textAlign = 'left';
     octx.textBaseline = 'bottom';
@@ -1159,7 +1168,7 @@ export default function Game() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `shiranai-hito_${gs.current.score}.png`;
+        a.download = `suiga_${gs.current.score}.png`;
         document.body.appendChild(a);
         a.click();
         a.remove();
