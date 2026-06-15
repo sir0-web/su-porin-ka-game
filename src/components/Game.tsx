@@ -138,28 +138,33 @@ interface Circle { x: number; y: number; r: number; }
 // Approximate the visible silhouette with a few inscribed circles
 // (greedy max-inscribed-circle packing on a distance transform). A
 // compound of these circles is very stable in Matter and naturally
-// leaves concave notches (e.g. at wing roots).
+// leaves concave notches (e.g. wing roots). Detached features (halo,
+// flames, beads) are kept too — only tiny specks are dropped.
 function packCircles(d: Uint8ClampedArray, w: number, h: number, maxCircles: number): Circle[] {
-  // mask of the largest opaque component (alpha > 80)
+  // label opaque components (alpha > 80)
   const mask = new Uint8Array(w * h);
   for (let p = 0; p < w * h; p++) mask[p] = d[p * 4 + 3] > 80 ? 1 : 0;
   const lbl = new Int32Array(w * h).fill(-1);
-  let best = -1, bestA = 0;
+  const areas: number[] = [];
   for (let s = 0; s < w * h; s++) {
     if (!mask[s] || lbl[s] >= 0) continue;
-    const stk = [s]; lbl[s] = s; let a = 0;
+    const id = areas.length;
+    const stk = [s]; lbl[s] = id; let a = 0;
     while (stk.length) {
       const p = stk.pop()!; a++;
       const px = p % w, py = (p / w) | 0;
-      if (px > 0 && mask[p - 1] && lbl[p - 1] < 0) { lbl[p - 1] = s; stk.push(p - 1); }
-      if (px < w - 1 && mask[p + 1] && lbl[p + 1] < 0) { lbl[p + 1] = s; stk.push(p + 1); }
-      if (py > 0 && mask[p - w] && lbl[p - w] < 0) { lbl[p - w] = s; stk.push(p - w); }
-      if (py < h - 1 && mask[p + w] && lbl[p + w] < 0) { lbl[p + w] = s; stk.push(p + w); }
+      if (px > 0 && mask[p - 1] && lbl[p - 1] < 0) { lbl[p - 1] = id; stk.push(p - 1); }
+      if (px < w - 1 && mask[p + 1] && lbl[p + 1] < 0) { lbl[p + 1] = id; stk.push(p + 1); }
+      if (py > 0 && mask[p - w] && lbl[p - w] < 0) { lbl[p - w] = id; stk.push(p - w); }
+      if (py < h - 1 && mask[p + w] && lbl[p + w] < 0) { lbl[p + w] = id; stk.push(p + w); }
     }
-    if (a > bestA) { bestA = a; best = s; }
+    areas.push(a);
   }
-  if (best < 0) return [];
-  for (let p = 0; p < w * h; p++) if (lbl[p] !== best) mask[p] = 0;
+  if (!areas.length) return [];
+  // keep body + detached features; drop tiny specks (< 2% of largest)
+  const largest = Math.max(...areas);
+  const minArea = Math.max(40, 0.02 * largest);
+  for (let p = 0; p < w * h; p++) if (lbl[p] >= 0 && areas[lbl[p]] < minArea) mask[p] = 0;
 
   // distance transform (two-pass chamfer)
   const INF = 1e9, dist = new Float64Array(w * h);
@@ -177,7 +182,7 @@ function packCircles(d: Uint8ClampedArray, w: number, h: number, maxCircles: num
     for (let p = 0; p < w * h; p++) if (dwork[p] > md) { md = dwork[p]; mp = p; }
     if (mp < 0) break;
     if (k === 0) firstR = md;
-    if (md < Math.max(3, firstR * 0.14)) break;
+    if (md < Math.max(2.5, firstR * 0.14)) break;
     const cx = mp % w, cy = (mp / w) | 0;
     circles.push({ x: cx, y: cy, r: md });
     const cr2 = md * md;
@@ -346,7 +351,7 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
 
   // Collision shape: pack the visible silhouette with inscribed circles
   // (stable compound body, with natural notches at wing roots).
-  const packed = packCircles(d, w, h, 8);
+  const packed = packCircles(d, w, h, 12);
   let cx0 = (minx + maxx + 2) / 2, cy0 = (miny + maxy + 2) / 2;
   if (packed.length) {
     // centroid = area-weighted (mass) centre of the circles
