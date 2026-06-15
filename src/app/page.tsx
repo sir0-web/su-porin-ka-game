@@ -9,28 +9,9 @@ export default function Page() {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        padding: '8px 0 0',
+        padding: '4px 0 0',
       }}
     >
-      {/* Title bar */}
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 400,
-          padding: '6px 12px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          borderBottom: '1px solid #2a1e60',
-          marginBottom: 4,
-        }}
-      >
-        <span style={{ color: '#c8a030', fontSize: 10, letterSpacing: 2, fontWeight: 700 }}>
-          ✦ RAGNAROK ORIGIN ✦
-        </span>
-      </div>
-
       <Game />
 
       {/* Footer */}

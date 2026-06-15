@@ -1483,8 +1483,11 @@ export default function Game() {
     const update = () => {
       const wrap = wrapRef.current;
       if (!wrap) return;
-      const avail = (wrap.parentElement?.clientWidth ?? window.innerWidth) - 16;
-      const s = Math.min(1, avail / W);
+      // Fit the board to BOTH the available width and height, and allow
+      // it to grow beyond 1× (using the space freed by removing the header).
+      const availW = (wrap.parentElement?.clientWidth ?? window.innerWidth) - 8;
+      const availH = window.innerHeight - 48; // leave room for the footer
+      const s = Math.max(0.2, Math.min(availW / W, availH / H, 2.2));
       scaleRef.current = s;
       wrap.style.transform       = `scale(${s})`;
       wrap.style.transformOrigin = 'top center';
