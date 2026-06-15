@@ -93,8 +93,12 @@ function evoName(lvl: number): string {
   return lvl >= MAX_LEVEL ? '？？？' : MONSTERS[lvl].name;
 }
 
-// Shared button rects (keep draw + hit-test in sync)
-const START_BTN = { w: 176, h: 36, x: CX - 88, y: 264 };
+// TOP menu button rects
+const MENU_START_BTN = { w: 260, h: 52, x: CX - 130, y: 222 };
+const MENU_RANK_BTN  = { w: 230, h: 44, x: CX - 115, y: 288 };
+const MENU_SET_BTN   = { w: 230, h: 44, x: CX - 115, y: 344 };
+const MENU_HOW_BTN   = { w: 230, h: 44, x: CX - 115, y: 400 };
+// In-game / game-over button rects
 const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
 const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
 const GO_SHOT_BTN = { w: 90, h: 38, x: CX + 2, y: 584 };       // save screenshot
@@ -392,6 +396,13 @@ export default function Game() {
   const bgmGameoverRef      = useRef<HTMLAudioElement | null>(null);
   const seGattaiRef         = useRef<HTMLAudioElement | null>(null);
   const seShiranaihitoRef   = useRef<HTMLAudioElement | null>(null);
+  const bgmOnRef            = useRef(true);
+  const seOnRef             = useRef(true);
+
+  const [bgmOn, setBgmOn]   = useState(true);
+  const [seOn,  setSeOn]    = useState(true);
+  const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto'>(null);
+  const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto'>(null);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -407,7 +418,6 @@ export default function Game() {
   });
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');
-  const [playerName, setPlayerName] = useState('');
 
   // Load saved ranking once on mount
   useEffect(() => { rankingRef.current = loadRanking(); }, []);
@@ -430,6 +440,22 @@ export default function Game() {
     seShiranaihitoRef.current = seS;
     return () => { bgm.pause(); };
   }, []);
+
+  useEffect(() => {
+    bgmOnRef.current = bgmOn;
+    const bgm = bgmRef.current;
+    if (!bgm) return;
+    if (!bgmOn) {
+      bgm.pause();
+      bgmGameoverRef.current?.pause();
+    } else {
+      const phase = gs.current.phase;
+      if (phase === 'start' || phase === 'playing') bgm.play().catch(() => {});
+      else if (phase === 'gameover') bgmGameoverRef.current?.play().catch(() => {});
+    }
+  }, [bgmOn]);
+
+  useEffect(() => { seOnRef.current = seOn; }, [seOn]);
 
   // ── Diamond ornament ────────────────────────────────────────
   const diamond = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, s: number) => {
@@ -950,11 +976,10 @@ export default function Game() {
 
   // ── Start screen ────────────────────────────────────────────
   const drawStart = useCallback((ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = 'rgba(4,4,20,0.9)';
+    ctx.fillStyle = 'rgba(4,4,20,0.92)';
     ctx.fillRect(0, 0, W, H);
 
-    // Title — light-novel style acrostic. The big red leading chars,
-    // read down the left column, spell スイガゲーム.
+    // Acrostic title (big red leading chars read downward = スイガゲーム)
     {
       const lines: [string, string][] = [
         ['ス', 'ごい'],
@@ -962,14 +987,13 @@ export default function Game() {
         ['ガ', 'ったいさせたら最後に知らない人がでてきて唖然とした'],
         ['ゲーム', ''],
       ];
-      const x0 = 22, lh = 44, baseY = 70;
+      const x0 = 22, lh = 44, baseY = 60;
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       lines.forEach(([red, white], i) => {
         const by = baseY + i * lh;
         let x = x0;
-        // big red leading character(s)
         ctx.font = 'bold 38px "Noto Serif JP", "Yu Mincho", serif';
         ctx.lineJoin = 'round';
         ctx.lineWidth = 4.5;
@@ -984,7 +1008,6 @@ export default function Game() {
         ctx.fillText(red, x, by);
         x += ctx.measureText(red).width + 3;
         ctx.shadowBlur = 0;
-        // rest of the line in white (kept small so the red title pops)
         if (white) {
           ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
           ctx.lineWidth = 2.5;
@@ -997,120 +1020,47 @@ export default function Game() {
       ctx.restore();
     }
 
-    // Name field label (the actual <input> is an HTML overlay)
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 10px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('プレイヤー名（任意）', CX, 216);
-
-    // Start button
-    const b = START_BTN;
-    const bg = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
-    bg.addColorStop(0, '#3a2a00'); bg.addColorStop(0.5, '#c8a030'); bg.addColorStop(1, '#3a2a00');
-    ctx.fillStyle = bg;
-    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill();
-    ctx.strokeStyle = P.goldBrt; ctx.lineWidth = 1.5;
-    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.stroke();
-    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 10;
-    ctx.fillStyle = '#fffadc';
-    ctx.font = 'bold 14px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('⚔  ゲームスタート  ⚔', CX, b.y + b.h / 2);
-    ctx.shadowBlur = 0;
-
-    // ── Evolution route panel (3-row snake, big icons + path) ──
-    const ep = { x: 22, y: 306, w: W - 44, h: 158 };
-    ctx.fillStyle = P.panel;
-    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 10); ctx.fill();
-    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 10); ctx.stroke();
-    ctx.fillStyle = P.gold; rrect(ctx, ep.x, ep.y, ep.w, 3, 3); ctx.fill();
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('✦  進化ルート  ✦', ep.x + ep.w / 2, ep.y + 8);
-
-    const pad = 20;
-    const step = (ep.w - pad * 2) / 4;          // 4 columns
-    const colX = (c: number) => ep.x + pad + step * c + step / 2;
-    const rowY = [ep.y + 46, ep.y + 88, ep.y + 130];
-    const pr = 20;
-
-    // snake layout: which (col,row) each level sits at
-    const slot = (lvl: number): { c: number; r: number } => {
-      if (lvl <= 3) return { c: lvl, r: 0 };          // 0..3  L→R
-      if (lvl <= 7) return { c: 7 - lvl, r: 1 };      // 4..7  R→L
-      return { c: lvl - 8, r: 2 };                     // 8..10 L→R
-    };
-
-    // 1) connecting path behind the nodes
-    ctx.strokeStyle = 'rgba(200,160,48,0.45)';
-    ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // Separator line under title
+    ctx.save();
+    ctx.strokeStyle = P.gold;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.35;
     ctx.beginPath();
-    ctx.moveTo(colX(0), rowY[0]);
-    ctx.lineTo(colX(3), rowY[0]);
-    ctx.lineTo(colX(3), rowY[1]);
-    ctx.lineTo(colX(0), rowY[1]);
-    ctx.lineTo(colX(0), rowY[2]);
-    ctx.lineTo(colX(2), rowY[2]);
+    ctx.moveTo(22, 212); ctx.lineTo(W - 22, 212);
     ctx.stroke();
+    ctx.restore();
 
-    // 2) big directional arrows along the path
-    const arrow = (x: number, y: number, ch: string) => {
-      ctx.fillStyle = P.goldBrt;
-      ctx.font = 'bold 22px sans-serif';
+    // Menu button helper
+    const menuBtn = (
+      b: { x: number; y: number; w: number; h: number },
+      label: string,
+      primary: boolean,
+    ) => {
+      const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
+      if (primary) {
+        g.addColorStop(0, '#3a2a00'); g.addColorStop(0.5, '#c8a030'); g.addColorStop(1, '#3a2a00');
+      } else {
+        g.addColorStop(0, '#0a0a24'); g.addColorStop(0.5, '#16163c'); g.addColorStop(1, '#0a0a24');
+      }
+      ctx.fillStyle = g;
+      rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.fill();
+      ctx.strokeStyle = primary ? P.goldBrt : P.gold;
+      ctx.lineWidth = primary ? 2 : 1.5;
+      rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.stroke();
+      if (primary) { ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 14; }
+      ctx.fillStyle = primary ? '#fffadc' : P.text;
+      ctx.font = `bold ${primary ? 17 : 14}px "Noto Sans JP", sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(ch, x, y);
+      ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
+      ctx.shadowBlur = 0;
     };
-    arrow((colX(0) + colX(1)) / 2, rowY[0], '›');
-    arrow((colX(1) + colX(2)) / 2, rowY[0], '›');
-    arrow((colX(2) + colX(3)) / 2, rowY[0], '›');
-    arrow(colX(3), (rowY[0] + rowY[1]) / 2, '↓');
-    arrow((colX(2) + colX(3)) / 2, rowY[1], '‹');
-    arrow((colX(1) + colX(2)) / 2, rowY[1], '‹');
-    arrow((colX(0) + colX(1)) / 2, rowY[1], '‹');
-    arrow(colX(0), (rowY[1] + rowY[2]) / 2, '↓');
-    arrow((colX(0) + colX(1)) / 2, rowY[2], '›');
-    arrow((colX(1) + colX(2)) / 2, rowY[2], '›');
 
-    // 3) nodes
-    for (let lvl = 0; lvl <= MAX_LEVEL; lvl++) {
-      const s = slot(lvl);
-      const px = colX(s.c), py = rowY[s.r];
-      ctx.beginPath();
-      ctx.arc(px, py, pr + 4, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(8,8,26,0.92)';
-      ctx.fill();
-      if (lvl === MAX_LEVEL) {
-        drawMystery(ctx, px, py, pr);
-      } else {
-        const sc = pr / MONSTERS[lvl].radius;
-        ctx.save();
-        ctx.translate(px, py);
-        ctx.scale(sc, sc);
-        drawMonster(ctx, 0, 0, lvl, 1);
-        ctx.restore();
-      }
-    }
-
-    // ── Ranking panel ──────────────────────────────────────────
-    const rx = 22, ry = 470, rw = W - 44, rh = 170;
-    ctx.fillStyle = P.panel;
-    rrect(ctx, rx, ry, rw, rh, 9); ctx.fill();
-    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, rx, ry, rw, rh, 9); ctx.stroke();
-    ctx.fillStyle = P.gold; rrect(ctx, rx, ry, rw, 3, 3); ctx.fill();
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('🏆  ランキング  TOP5', rx + rw / 2, ry + 8);
-    drawRanking(ctx, rx + 6, ry + 28, rw - 12, 27, 5, -1);
-  }, [diamond, drawMonster, drawMystery, drawRanking]);
+    menuBtn(MENU_START_BTN, '⚔  ゲームスタート  ⚔', true);
+    menuBtn(MENU_RANK_BTN,  '🏆  ランキング', false);
+    menuBtn(MENU_SET_BTN,   '⚙  セッティング', false);
+    menuBtn(MENU_HOW_BTN,   '📖  遊び方', false);
+  }, []);
 
   // ── Game over screen ────────────────────────────────────────
   const drawGameOver = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
@@ -1326,15 +1276,17 @@ export default function Game() {
       const gain = base * combo;
       gs.current.score += gain;
 
-      // Merge SE (知らない人同士の合成は専用SE、それ以外は合体SE)
-      if (level === MAX_LEVEL) {
-        if (seShiranaihitoRef.current) {
-          const clone = seShiranaihitoRef.current.cloneNode() as HTMLAudioElement;
+      // Merge SE
+      if (seOnRef.current) {
+        if (level === MAX_LEVEL) {
+          if (seShiranaihitoRef.current) {
+            const clone = seShiranaihitoRef.current.cloneNode() as HTMLAudioElement;
+            clone.play().catch(() => {});
+          }
+        } else if (seGattaiRef.current) {
+          const clone = seGattaiRef.current.cloneNode() as HTMLAudioElement;
           clone.play().catch(() => {});
         }
-      } else if (seGattaiRef.current) {
-        const clone = seGattaiRef.current.cloneNode() as HTMLAudioElement;
-        clone.play().catch(() => {});
       }
 
       // Floating popups (juicy feedback)
@@ -1450,7 +1402,8 @@ export default function Game() {
     const goAudio = bgmGameoverRef.current;
     if (goAudio) { goAudio.pause(); goAudio.currentTime = 0; }
     const bgm = bgmRef.current;
-    if (bgm) { bgm.currentTime = 0; bgm.play().catch(() => {}); }
+    if (bgm && bgmOnRef.current) { bgm.currentTime = 0; bgm.play().catch(() => {}); }
+    else if (bgm) { bgm.pause(); bgm.currentTime = 0; }
 
     let last = 0;
     const loop = (ts: number) => {
@@ -1503,7 +1456,7 @@ export default function Game() {
           s.phase = 'gameover';
           bgmRef.current?.pause();
           const go = bgmGameoverRef.current;
-          if (go) { go.currentTime = 0; go.play().catch(() => {}); }
+          if (go && bgmOnRef.current) { go.currentTime = 0; go.play().catch(() => {}); }
           if (s.score > s.highScore) {
             s.highScore = s.score;
             try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
@@ -1663,9 +1616,20 @@ export default function Game() {
       cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
 
     if (st.phase === 'start') {
-      if (inBtn(START_BTN)) {
+      // Unlock BGM on first interaction (browser autoplay policy)
+      if (bgmRef.current && bgmRef.current.paused && bgmOnRef.current) {
+        bgmRef.current.play().catch(() => {});
+      }
+      if (modalRef.current !== null) return;
+      if (inBtn(MENU_START_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
+      } else if (inBtn(MENU_RANK_BTN)) {
+        modalRef.current = 'ranking'; setModal('ranking');
+      } else if (inBtn(MENU_SET_BTN)) {
+        modalRef.current = 'settings'; setModal('settings');
+      } else if (inBtn(MENU_HOW_BTN)) {
+        modalRef.current = 'howto'; setModal('howto');
       }
     } else if (st.phase === 'gameover') {
       if (viewingRef.current) {
@@ -1703,34 +1667,147 @@ export default function Game() {
             handleClick(t.clientX, t.clientY);
           }}
         />
-        {uiPhase === 'start' && (
-          <input
-            type="text"
-            value={playerName}
-            onChange={(e) => { setPlayerName(e.target.value); playerNameRef.current = e.target.value; }}
-            maxLength={10}
-            placeholder="なまえを入力"
-            aria-label="プレイヤー名"
-            style={{
-              position: 'absolute',
-              left: 96,
-              top: 228,
-              width: 208,
-              height: 28,
-              boxSizing: 'border-box',
-              padding: '0 10px',
-              background: 'rgba(10,10,30,0.92)',
-              border: '1.5px solid #c8a030',
-              borderRadius: 7,
-              color: '#ffe9b0',
-              textAlign: 'center',
-              fontSize: 16,
-              fontFamily: '"Noto Sans JP", sans-serif',
-              outline: 'none',
-              zIndex: 5,
-            }}
-          />
-        )}
+        {modal !== null && (() => {
+          const closeModal = () => { modalRef.current = null; setModal(null); };
+          const panelStyle: React.CSSProperties = {
+            background: 'rgba(8,8,28,0.98)',
+            border: '1.5px solid #c8a030',
+            borderRadius: 12,
+            width: 360,
+            maxHeight: 580,
+            overflowY: 'auto',
+            padding: '18px 22px 22px',
+            boxSizing: 'border-box',
+            color: '#f0e0b0',
+            fontFamily: '"Noto Sans JP", sans-serif',
+          };
+          const h2Style: React.CSSProperties = {
+            textAlign: 'center', color: '#c8a030', margin: '0 0 14px',
+            fontSize: 16, fontWeight: 'bold',
+          };
+          const closeBtn: React.CSSProperties = {
+            display: 'block', margin: '18px auto 0',
+            padding: '8px 36px',
+            background: 'rgba(10,10,30,0.9)',
+            border: '1.5px solid #c8a030',
+            borderRadius: 8,
+            color: '#f0e0b0', fontSize: 13, cursor: 'pointer',
+            fontFamily: '"Noto Sans JP", sans-serif',
+          };
+          const onStyle: React.CSSProperties = {
+            padding: '6px 22px',
+            background: 'linear-gradient(180deg,#3a2a00,#c8a030,#3a2a00)',
+            border: '1.5px solid #ffe050', borderRadius: 7,
+            color: '#fffadc', fontSize: 13, cursor: 'pointer',
+            fontFamily: '"Noto Sans JP", sans-serif',
+          };
+          const offStyle: React.CSSProperties = {
+            padding: '6px 22px',
+            background: 'rgba(10,10,28,0.9)',
+            border: '1.5px solid #3a3a60', borderRadius: 7,
+            color: '#6a6a90', fontSize: 13, cursor: 'pointer',
+            fontFamily: '"Noto Sans JP", sans-serif',
+          };
+
+          return (
+            <div
+              style={{
+                position: 'absolute', top: 0, left: 0, width: W, height: H,
+                background: 'rgba(4,4,20,0.88)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                zIndex: 10,
+              }}
+              onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
+            >
+              <div style={panelStyle}>
+                {modal === 'ranking' && (<>
+                  <h2 style={h2Style}>🏆 ランキング TOP10</h2>
+                  {rankingRef.current.length === 0 ? (
+                    <p style={{ textAlign: 'center', color: '#8a7a50', fontSize: 12 }}>
+                      まだ記録がありません
+                    </p>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <tbody>
+                        {rankingRef.current.slice(0, 10).map((e, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid rgba(200,160,48,0.18)' }}>
+                            <td style={{
+                              padding: '7px 4px', width: 28, fontSize: 14, fontWeight: 'bold',
+                              color: i === 0 ? '#ffd24a' : i === 1 ? '#cfd4dd' : i === 2 ? '#d8945a' : '#6a6a90',
+                            }}>{i + 1}</td>
+                            <td style={{ padding: '7px 4px' }}>
+                              {e.name.length > 8 ? e.name.slice(0, 8) + '…' : e.name}
+                            </td>
+                            <td style={{ padding: '7px 4px', textAlign: 'right', color: '#ffe050', fontWeight: 'bold' }}>
+                              {e.score}
+                            </td>
+                            <td style={{ padding: '7px 4px', textAlign: 'right', color: '#6a6a90', fontSize: 10 }}>
+                              {evoName(e.maxLevel)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <button style={closeBtn} onClick={closeModal}>閉じる</button>
+                </>)}
+
+                {modal === 'settings' && (<>
+                  <h2 style={h2Style}>⚙ セッティング</h2>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                    <span style={{ fontSize: 14 }}>BGM</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={bgmOn ? onStyle : offStyle} onClick={() => setBgmOn(true)}>ON</button>
+                      <button style={!bgmOn ? onStyle : offStyle} onClick={() => setBgmOn(false)}>OFF</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                    <span style={{ fontSize: 14 }}>SE（効果音）</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={seOn ? onStyle : offStyle} onClick={() => setSeOn(true)}>ON</button>
+                      <button style={!seOn ? onStyle : offStyle} onClick={() => setSeOn(false)}>OFF</button>
+                    </div>
+                  </div>
+                  <button style={closeBtn} onClick={closeModal}>閉じる</button>
+                </>)}
+
+                {modal === 'howto' && (<>
+                  <h2 style={h2Style}>📖 遊び方</h2>
+                  <ol style={{ paddingLeft: 20, margin: '0 0 16px', fontSize: 12, lineHeight: '2' }}>
+                    <li>画面をクリック / タップしてモンスターを落とそう</li>
+                    <li>同じモンスターが2体ぶつかると合成！次の進化形に変わる</li>
+                    <li>モンスターが赤いラインを超えたまま止まると<span style={{ color: '#ff6060' }}>ゲームオーバー</span></li>
+                    <li>短い間隔で合成を重ねると<span style={{ color: '#ffe050' }}>コンボボーナス</span>！</li>
+                    <li>最強モンスターを2体合成すると<span style={{ color: '#ff9050' }}>消滅 +2000pt</span>！</li>
+                  </ol>
+                  <div style={{ borderTop: '1px solid rgba(200,160,48,0.35)', paddingTop: 14 }}>
+                    <div style={{ color: '#c8a030', fontWeight: 'bold', marginBottom: 10, fontSize: 13 }}>
+                      ✦ 進化ルート ✦
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px 3px', alignItems: 'center', fontSize: 11 }}>
+                      {MONSTERS.slice(0, MAX_LEVEL).map((m, i) => (
+                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          <span style={{
+                            background: 'rgba(200,160,48,0.13)',
+                            border: '1px solid rgba(200,160,48,0.45)',
+                            borderRadius: 5, padding: '2px 6px',
+                          }}>{m.name}</span>
+                          <span style={{ color: '#c8a030' }}>→</span>
+                        </span>
+                      ))}
+                      <span style={{
+                        background: 'rgba(150,70,255,0.15)',
+                        border: '1px solid rgba(150,70,255,0.5)',
+                        borderRadius: 5, padding: '2px 6px', color: '#d0b0ff',
+                      }}>？？？（消滅 +2000pt）</span>
+                    </div>
+                  </div>
+                  <button style={closeBtn} onClick={closeModal}>閉じる</button>
+                </>)}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
