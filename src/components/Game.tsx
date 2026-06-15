@@ -95,8 +95,12 @@ function evoName(lvl: number): string {
 
 // Shared button rects (keep draw + hit-test in sync)
 const START_BTN = { w: 184, h: 46, x: CX - 92, y: 300 };
-const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 540 };
-const GO_SHOT_BTN = { w: 184, h: 40, x: CX - 92, y: 592 };
+const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
+const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
+const GO_SHOT_BTN = { w: 90, h: 38, x: CX + 2, y: 584 };       // save screenshot
+// Buttons shown while gazing at the final board
+const GO_BACK_BTN = { w: 112, h: 34, x: 12, y: 10 };
+const GO_VSHOT_BTN = { w: 112, h: 34, x: W - 124, y: 10 };
 
 // ─── Rounded rect path ────────────────────────────────────────
 function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -378,6 +382,7 @@ export default function Game() {
   const popupsRef     = useRef<Popup[]>([]);
   const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
+  const viewingRef    = useRef<boolean>(false); // gazing at the final board
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -1081,34 +1086,46 @@ export default function Game() {
     ctx.fillText('🏆  ランキング  BEST10', CX, by + 172);
     drawRanking(ctx, bx + 14, by + 192, bw - 28, 28, 8, lastRankIdxRef.current);
 
-    // Retry button
-    const b = GO_BTN;
-    const bg = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
-    bg.addColorStop(0, '#1a0030'); bg.addColorStop(0.5, '#6030c0'); bg.addColorStop(1, '#1a0030');
-    ctx.fillStyle = bg;
-    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill();
-    ctx.strokeStyle = '#a060ff'; ctx.lineWidth = 1.5;
-    rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.stroke();
-    ctx.fillStyle = '#f0e0ff';
-    ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('⚔  もう一度挑戦  ⚔', CX, b.y + b.h / 2);
+    // helper: gradient button
+    const btn = (
+      r: { x: number; y: number; w: number; h: number },
+      c0: string, c1: string, edge: string, fg: string, label: string, fs: number,
+    ) => {
+      const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
+      g.addColorStop(0, c0); g.addColorStop(0.5, c1); g.addColorStop(1, c0);
+      ctx.fillStyle = g;
+      rrect(ctx, r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = edge; ctx.lineWidth = 1.5;
+      rrect(ctx, r.x, r.y, r.w, r.h, 8); ctx.stroke();
+      ctx.fillStyle = fg;
+      ctx.font = `bold ${fs}px "Noto Sans JP", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
+    };
 
-    // Screenshot button (saves the final board with name + score)
-    const sb = GO_SHOT_BTN;
-    const sg = ctx.createLinearGradient(sb.x, sb.y, sb.x, sb.y + sb.h);
-    sg.addColorStop(0, '#06243a'); sg.addColorStop(0.5, '#1c84b8'); sg.addColorStop(1, '#06243a');
-    ctx.fillStyle = sg;
-    rrect(ctx, sb.x, sb.y, sb.w, sb.h, 8); ctx.fill();
-    ctx.strokeStyle = '#5ec8ff'; ctx.lineWidth = 1.5;
-    rrect(ctx, sb.x, sb.y, sb.w, sb.h, 8); ctx.stroke();
-    ctx.fillStyle = '#e6f6ff';
-    ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('📷  盤面を保存（スクショ）', CX, sb.y + sb.h / 2);
+    // Retry (primary) + view-board + screenshot (secondary row)
+    btn(GO_BTN, '#1a0030', '#6030c0', '#a060ff', '#f0e0ff', '⚔  もう一度挑戦  ⚔', 15);
+    btn(GO_VIEW_BTN, '#0a2a10', '#2a9c46', '#6cff9a', '#e6ffe9', '👁 盤面を見る', 12);
+    btn(GO_SHOT_BTN, '#06243a', '#1c84b8', '#5ec8ff', '#e6f6ff', '📷 保存', 12);
   }, [diamond, drawRanking]);
+
+  // ── Board-gazing overlay (final board visible, minimal chrome) ──
+  const drawBoardView = useCallback((ctx: CanvasRenderingContext2D) => {
+    const button = (r: { x: number; y: number; w: number; h: number }, label: string, edge: string) => {
+      ctx.fillStyle = 'rgba(6,6,24,0.82)';
+      rrect(ctx, r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = edge; ctx.lineWidth = 1.5;
+      rrect(ctx, r.x, r.y, r.w, r.h, 8); ctx.stroke();
+      ctx.fillStyle = '#f0e8d0';
+      ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
+    };
+    button(GO_BACK_BTN, '← もどる', '#c8a030');
+    button(GO_VSHOT_BTN, '📷 保存', '#5ec8ff');
+  }, []);
 
   // ── Save a screenshot of the final board + name/score watermark ──
   const saveScreenshot = useCallback(() => {
@@ -1121,7 +1138,7 @@ export default function Game() {
     octx.drawImage(snap, 0, 0);
     // Unobtrusive watermark: name + score, bottom-left, semi-transparent
     const nm = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-    const label = `${nm}  ${gs.current.score} pts  ｜ スぽりんカゲーム`;
+    const label = `${nm}  ${gs.current.score} pts  ｜ 知らない人`;
     octx.font = 'bold 11px "Noto Sans JP", sans-serif';
     octx.textAlign = 'left';
     octx.textBaseline = 'bottom';
@@ -1137,7 +1154,7 @@ export default function Game() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `sporinka_${gs.current.score}.png`;
+        a.download = `shiranai-hito_${gs.current.score}.png`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1310,6 +1327,7 @@ export default function Game() {
     popupsRef.current = [];
     comboRef.current = { count: 0, lastTime: 0 };
     snapshotRef.current = null;
+    viewingRef.current = false;
 
     // Physics world
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
@@ -1396,6 +1414,7 @@ export default function Game() {
           const { list, index } = insertRanking({ name, score: s.score, maxLevel: s.maxLevel });
           rankingRef.current = list;
           lastRankIdxRef.current = index;
+          viewingRef.current = false;
           setUiPhase('gameover');
         }
       }
@@ -1446,12 +1465,15 @@ export default function Game() {
 
       drawPopups(ctx);
       drawSecretFx(ctx);
-      if (s.phase === 'gameover') drawGameOver(ctx, s);
+      if (s.phase === 'gameover') {
+        if (viewingRef.current) drawBoardView(ctx); // gaze at the final board
+        else drawGameOver(ctx, s);
+      }
 
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawPopups, drawSecretFx, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawSecretFx, handleMerge]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
@@ -1547,9 +1569,15 @@ export default function Game() {
         await initGame();
       }
     } else if (st.phase === 'gameover') {
-      if (inBtn(GO_BTN)) {
+      if (viewingRef.current) {
+        // gazing at the final board
+        if (inBtn(GO_BACK_BTN)) viewingRef.current = false;
+        else if (inBtn(GO_VSHOT_BTN)) saveScreenshot();
+      } else if (inBtn(GO_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
+      } else if (inBtn(GO_VIEW_BTN)) {
+        viewingRef.current = true;
       } else if (inBtn(GO_SHOT_BTN)) {
         saveScreenshot();
       }

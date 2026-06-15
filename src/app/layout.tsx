@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'スぽりんカゲーム',
+  title: '知らない人',
   description: 'ラグナロクオリジン風スイカゲーム',
 };
 
