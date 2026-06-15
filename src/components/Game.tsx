@@ -94,7 +94,7 @@ function evoName(lvl: number): string {
 }
 
 // Shared button rects (keep draw + hit-test in sync)
-const START_BTN = { w: 184, h: 46, x: CX - 92, y: 300 };
+const START_BTN = { w: 184, h: 46, x: CX - 92, y: 252 };
 const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
 const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
 const GO_SHOT_BTN = { w: 90, h: 38, x: CX + 2, y: 584 };       // save screenshot
@@ -977,8 +977,9 @@ export default function Game() {
     // Name field label (the actual <input> is an HTML overlay)
     ctx.fillStyle = P.gold;
     ctx.font = 'bold 10px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('プレイヤー名（任意）', CX, 220);
+    ctx.fillText('プレイヤー名（任意）', CX, 198);
 
     // Start button
     const b = START_BTN;
@@ -996,21 +997,32 @@ export default function Game() {
     ctx.fillText('⚔  ゲームスタート  ⚔', CX, b.y + b.h / 2);
     ctx.shadowBlur = 0;
 
-    // Evolution route — all 11 monsters, last one is a secret
-    const preY = 360;
-    ctx.fillStyle = P.textDim;
-    ctx.font = '9px "Noto Sans JP", sans-serif';
+    // ── Evolution route panel (2-row snake, larger icons) ──────
+    const ep = { x: 28, y: 306, w: W - 56, h: 130 };
+    ctx.fillStyle = P.panel;
+    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 9); ctx.fill();
+    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
+    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 9); ctx.stroke();
+    ctx.fillStyle = P.gold; rrect(ctx, ep.x, ep.y, ep.w, 3, 3); ctx.fill();
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('— 進化ルート —', CX, preY);
-    const shown = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    const n = shown.length;
-    const x0 = 20, x1 = W - 20;
-    const stepX = (x1 - x0) / (n - 1);
-    const pr = 13;
-    shown.forEach((lvl, i) => {
-      const px = x0 + i * stepX;
-      const py = preY + 30;
+    ctx.fillText('✦  進化ルート  ✦', ep.x + ep.w / 2, ep.y + 8);
+
+    const pad = 20;
+    const cols = 6;
+    const step = (ep.w - pad * 2) / cols;
+    const colX = (c: number) => ep.x + pad + step * c + step / 2;
+    const row1Y = ep.y + 56, row2Y = ep.y + 100;
+    const pr = 17;
+
+    const drawNode = (lvl: number, px: number, py: number) => {
+      // soft seat behind each node
+      ctx.beginPath();
+      ctx.arc(px, py, pr + 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fill();
       if (lvl === MAX_LEVEL) {
         drawMystery(ctx, px, py, pr);
       } else {
@@ -1018,31 +1030,48 @@ export default function Game() {
         ctx.save();
         ctx.translate(px, py);
         ctx.scale(sc, sc);
-        drawMonster(ctx, 0, 0, lvl, 0.95);
+        drawMonster(ctx, 0, 0, lvl, 1);
         ctx.restore();
       }
-      if (i < n - 1) {
-        ctx.fillStyle = P.gold;
-        ctx.font = 'bold 9px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('›', px + stepX / 2, py);
-      }
-    });
+    };
+    const chevron = (x: number, y: number, ch: string) => {
+      ctx.fillStyle = P.goldBrt;
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ch, x, y);
+    };
 
-    // Ranking panel
-    const rx = 34, ry = 418, rw = W - 68, rh = 188;
+    // Row 1: levels 0–5, left → right
+    for (let c = 0; c < 6; c++) {
+      const px = colX(c);
+      if (c > 0) chevron(px - step / 2, row1Y, '›');
+      drawNode(c, px, row1Y);
+    }
+    // wrap arrow (col 5) row1 → row2
+    chevron(colX(5), (row1Y + row2Y) / 2, '↓');
+    // Row 2: levels 6–10, right → left (snake), 10 = secret
+    for (let k = 0; k < 5; k++) {
+      const lvl = 6 + k;
+      const c = 5 - k;
+      const px = colX(c);
+      if (k > 0) chevron(px + step / 2, row2Y, '‹');
+      drawNode(lvl, px, row2Y);
+    }
+
+    // ── Ranking panel ──────────────────────────────────────────
+    const rx = 28, ry = 446, rw = W - 56, rh = 190;
     ctx.fillStyle = P.panel;
-    rrect(ctx, rx, ry, rw, rh, 8); ctx.fill();
+    rrect(ctx, rx, ry, rw, rh, 9); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, rx, ry, rw, rh, 8); ctx.stroke();
+    rrect(ctx, rx, ry, rw, rh, 9); ctx.stroke();
     ctx.fillStyle = P.gold; rrect(ctx, rx, ry, rw, 3, 3); ctx.fill();
     ctx.fillStyle = P.gold;
     ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText('🏆  ランキング  TOP5', rx + rw / 2, ry + 8);
-    drawRanking(ctx, rx + 6, ry + 26, rw - 12, 30, 5, -1);
+    drawRanking(ctx, rx + 6, ry + 28, rw - 12, 30, 5, -1);
   }, [diamond, drawMonster, drawMystery, drawRanking]);
 
   // ── Game over screen ────────────────────────────────────────
@@ -1629,7 +1658,7 @@ export default function Game() {
             style={{
               position: 'absolute',
               left: 90,
-              top: 238,
+              top: 212,
               width: 220,
               height: 32,
               boxSizing: 'border-box',
