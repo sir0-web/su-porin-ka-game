@@ -997,12 +997,12 @@ export default function Game() {
     ctx.fillText('⚔  ゲームスタート  ⚔', CX, b.y + b.h / 2);
     ctx.shadowBlur = 0;
 
-    // ── Evolution route panel (2-row snake, larger icons) ──────
-    const ep = { x: 28, y: 306, w: W - 56, h: 130 };
+    // ── Evolution route panel (3-row snake, big icons + path) ──
+    const ep = { x: 22, y: 300, w: W - 44, h: 180 };
     ctx.fillStyle = P.panel;
-    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 9); ctx.fill();
+    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 10); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 9); ctx.stroke();
+    rrect(ctx, ep.x, ep.y, ep.w, ep.h, 10); ctx.stroke();
     ctx.fillStyle = P.gold; rrect(ctx, ep.x, ep.y, ep.w, 3, 3); ctx.fill();
     ctx.fillStyle = P.gold;
     ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
@@ -1011,17 +1011,56 @@ export default function Game() {
     ctx.fillText('✦  進化ルート  ✦', ep.x + ep.w / 2, ep.y + 8);
 
     const pad = 20;
-    const cols = 6;
-    const step = (ep.w - pad * 2) / cols;
+    const step = (ep.w - pad * 2) / 4;          // 4 columns
     const colX = (c: number) => ep.x + pad + step * c + step / 2;
-    const row1Y = ep.y + 56, row2Y = ep.y + 100;
-    const pr = 17;
+    const rowY = [ep.y + 54, ep.y + 100, ep.y + 146];
+    const pr = 22;
 
-    const drawNode = (lvl: number, px: number, py: number) => {
-      // soft seat behind each node
+    // snake layout: which (col,row) each level sits at
+    const slot = (lvl: number): { c: number; r: number } => {
+      if (lvl <= 3) return { c: lvl, r: 0 };          // 0..3  L→R
+      if (lvl <= 7) return { c: 7 - lvl, r: 1 };      // 4..7  R→L
+      return { c: lvl - 8, r: 2 };                     // 8..10 L→R
+    };
+
+    // 1) connecting path behind the nodes
+    ctx.strokeStyle = 'rgba(200,160,48,0.45)';
+    ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(colX(0), rowY[0]);
+    ctx.lineTo(colX(3), rowY[0]);
+    ctx.lineTo(colX(3), rowY[1]);
+    ctx.lineTo(colX(0), rowY[1]);
+    ctx.lineTo(colX(0), rowY[2]);
+    ctx.lineTo(colX(2), rowY[2]);
+    ctx.stroke();
+
+    // 2) big directional arrows along the path
+    const arrow = (x: number, y: number, ch: string) => {
+      ctx.fillStyle = P.goldBrt;
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ch, x, y);
+    };
+    arrow((colX(0) + colX(1)) / 2, rowY[0], '›');
+    arrow((colX(1) + colX(2)) / 2, rowY[0], '›');
+    arrow((colX(2) + colX(3)) / 2, rowY[0], '›');
+    arrow(colX(3), (rowY[0] + rowY[1]) / 2, '↓');
+    arrow((colX(2) + colX(3)) / 2, rowY[1], '‹');
+    arrow((colX(1) + colX(2)) / 2, rowY[1], '‹');
+    arrow((colX(0) + colX(1)) / 2, rowY[1], '‹');
+    arrow(colX(0), (rowY[1] + rowY[2]) / 2, '↓');
+    arrow((colX(0) + colX(1)) / 2, rowY[2], '›');
+    arrow((colX(1) + colX(2)) / 2, rowY[2], '›');
+
+    // 3) nodes
+    for (let lvl = 0; lvl <= MAX_LEVEL; lvl++) {
+      const s = slot(lvl);
+      const px = colX(s.c), py = rowY[s.r];
       ctx.beginPath();
-      ctx.arc(px, py, pr + 3, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.arc(px, py, pr + 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(8,8,26,0.92)';
       ctx.fill();
       if (lvl === MAX_LEVEL) {
         drawMystery(ctx, px, py, pr);
@@ -1033,34 +1072,10 @@ export default function Game() {
         drawMonster(ctx, 0, 0, lvl, 1);
         ctx.restore();
       }
-    };
-    const chevron = (x: number, y: number, ch: string) => {
-      ctx.fillStyle = P.goldBrt;
-      ctx.font = 'bold 13px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(ch, x, y);
-    };
-
-    // Row 1: levels 0–5, left → right
-    for (let c = 0; c < 6; c++) {
-      const px = colX(c);
-      if (c > 0) chevron(px - step / 2, row1Y, '›');
-      drawNode(c, px, row1Y);
-    }
-    // wrap arrow (col 5) row1 → row2
-    chevron(colX(5), (row1Y + row2Y) / 2, '↓');
-    // Row 2: levels 6–10, right → left (snake), 10 = secret
-    for (let k = 0; k < 5; k++) {
-      const lvl = 6 + k;
-      const c = 5 - k;
-      const px = colX(c);
-      if (k > 0) chevron(px + step / 2, row2Y, '‹');
-      drawNode(lvl, px, row2Y);
     }
 
     // ── Ranking panel ──────────────────────────────────────────
-    const rx = 28, ry = 446, rw = W - 56, rh = 190;
+    const rx = 22, ry = 490, rw = W - 44, rh = 150;
     ctx.fillStyle = P.panel;
     rrect(ctx, rx, ry, rw, rh, 9); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -1071,7 +1086,7 @@ export default function Game() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText('🏆  ランキング  TOP5', rx + rw / 2, ry + 8);
-    drawRanking(ctx, rx + 6, ry + 28, rw - 12, 30, 5, -1);
+    drawRanking(ctx, rx + 6, ry + 26, rw - 12, 24, 5, -1);
   }, [diamond, drawMonster, drawMystery, drawRanking]);
 
   // ── Game over screen ────────────────────────────────────────
