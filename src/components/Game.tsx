@@ -118,6 +118,7 @@ function hexA(hex: string, a: number): string {
 interface Sprite {
   canvas: HTMLCanvasElement;
   bx: number; by: number; bw: number; bh: number; // opaque bounding box
+  coreR: number;                                   // visible-core radius (sprite px, ~72% alpha mass)
 }
 
 // Remove the light cream background AND the grey ground-shadow by
@@ -275,7 +276,41 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
   }
   if (!any) { minx = 0; miny = 0; maxx = w - 1; maxy = h - 1; }
 
-  return { canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1 };
+  // Visible-core radius: alpha-weighted centroid, then the radius that
+  // captures ~72% of the alpha mass (excludes thin edges / wings / aura
+  // wisps) — used to size the collision circle to the visible body.
+  let sumA = 0, sX = 0, sY = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const a = d[(y * w + x) * 4 + 3];
+      if (!a) continue;
+      sumA += a; sX += a * x; sY += a * y;
+    }
+  }
+  let coreR = Math.min(maxx - minx + 1, maxy - miny + 1) / 2;
+  if (sumA > 0) {
+    const ccx = sX / sumA, ccy = sY / sumA;
+    const maxd = Math.ceil(Math.hypot(
+      Math.max(maxx - ccx, ccx - minx),
+      Math.max(maxy - ccy, ccy - miny),
+    ));
+    const hist = new Float64Array(maxd + 1);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const a = d[(y * w + x) * 4 + 3];
+        if (!a) continue;
+        const dist = Math.min(maxd, Math.round(Math.hypot(x - ccx, y - ccy)));
+        hist[dist] += a;
+      }
+    }
+    let cum = 0;
+    for (let r = 0; r <= maxd; r++) {
+      cum += hist[r];
+      if (cum >= 0.72 * sumA) { coreR = r; break; }
+    }
+  }
+
+  return { canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1, coreR };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -291,6 +326,7 @@ export default function Game() {
   const coolRef       = useRef<number>(0);
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
+  const colRadiusRef  = useRef<Map<number, number>>(new Map()); // collision radius (canvas px) per level
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
   const rankingRef    = useRef<RankEntry[]>([]);
   const lastRankIdxRef = useRef<number>(-1);
@@ -524,11 +560,22 @@ export default function Game() {
     drawMonster(ctx, 0, 0, st.nextLevel, 0.85);
     ctx.restore();
 
-    ctx.fillStyle = P.textDim;
-    ctx.font = '7px "Noto Sans JP", sans-serif';
-    ctx.textBaseline = 'bottom';
+    // Name with a dark backing pill for legibility
     const nameShort = nm.name.length > 7 ? nm.name.slice(0, 6) + '…' : nm.name;
-    ctx.fillText(nameShort, nx + nw / 2, py + ph - 4);
+    ctx.font = 'bold 9px "Noto Sans JP", sans-serif';
+    const tw = ctx.measureText(nameShort).width;
+    const pillW = Math.min(nw - 6, tw + 12);
+    const pillH = 14;
+    const pillX = nx + nw / 2 - pillW / 2;
+    const pillY = py + ph - pillH - 3;
+    ctx.fillStyle = 'rgba(0,0,0,0.78)';
+    rrect(ctx, pillX, pillY, pillW, pillH, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(200,160,48,0.6)'; ctx.lineWidth = 1;
+    rrect(ctx, pillX, pillY, pillW, pillH, 7); ctx.stroke();
+    ctx.fillStyle = '#ffe9a8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(nameShort, nx + nw / 2, pillY + pillH / 2 + 0.5);
 
     // Current monster at drop position
     if (st.phase === 'playing') {
@@ -966,7 +1013,10 @@ export default function Game() {
   ) => {
     const engine = engineRef.current as import('matter-js').Engine;
     const m = MONSTERS[level];
-    const body = Matter.Bodies.circle(x, y, m.radius, {
+    // Collision circle sized to the VISIBLE core (falls back to the
+    // nominal radius until the sprite has been processed).
+    const colR = colRadiusRef.current.get(level) ?? m.radius;
+    const body = Matter.Bodies.circle(x, y, colR, {
       restitution: 0.15,
       friction: 0.4,
       frictionStatic: 0.55,
@@ -1216,7 +1266,13 @@ export default function Game() {
       img.onload = () => {
         try {
           const sp = buildSprite(img, { keepLargest: m.keepLargest, erase: m.erase });
-          if (sp) procRef.current.set(m.id, sp);
+          if (sp) {
+            procRef.current.set(m.id, sp);
+            // collision radius = visible core, mapped to the render scale
+            const renderScale = (2 * m.radius * 1.05) / Math.min(sp.bw, sp.bh);
+            const col = sp.coreR * renderScale;
+            colRadiusRef.current.set(m.id, Math.max(0.5 * m.radius, Math.min(m.radius, col)));
+          }
         } catch { /* keep gradient fallback */ }
       };
       img.src = m.imageSrc;
