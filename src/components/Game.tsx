@@ -53,6 +53,7 @@ interface GS {
   dropX: number;
   canDrop: boolean;
   gameOverFrames: number;
+  overLineFrames: number; // safety-net timer: frames with a body over the line
   maxLevel: number;       // highest monster level reached this game
 }
 
@@ -121,143 +122,68 @@ function hexA(hex: string, a: number): string {
 }
 
 // ─── Processed (background-removed) sprite ────────────────────
-interface Vec { x: number; y: number; }
 interface Sprite {
   canvas: HTMLCanvasElement;
   bx: number; by: number; bw: number; bh: number; // opaque bounding box
-  hull: Vec[];                                     // convex hull (fallback collision)
-  outline: Vec[];                                  // concave silhouette outline (sprite px)
-  cxh: number; cyh: number;                        // centroid used for render + body alignment
+  circles: { dx: number; dy: number; r: number }[]; // collision circles, offset from centroid (sprite px)
+  cxh: number; cyh: number;                          // centroid (render + body alignment)
 }
 
-// Convex hull (Andrew's monotone chain), returns CCW order
-function convexHull(points: Vec[]): Vec[] {
-  if (points.length < 3) return points.slice();
-  const p = points.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y));
-  const cross = (o: Vec, a: Vec, b: Vec) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-  const lower: Vec[] = [];
-  for (const pt of p) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
-    lower.push(pt);
-  }
-  const upper: Vec[] = [];
-  for (let i = p.length - 1; i >= 0; i--) {
-    const pt = p[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
-    upper.push(pt);
-  }
-  lower.pop(); upper.pop();
-  return lower.concat(upper);
-}
+interface Circle { x: number; y: number; r: number; }
 
-// Area centroid of a simple polygon
-function polyCentroid(v: Vec[]): Vec {
-  let a = 0, cx = 0, cy = 0;
-  for (let i = 0; i < v.length; i++) {
-    const j = (i + 1) % v.length;
-    const cr = v[i].x * v[j].y - v[j].x * v[i].y;
-    a += cr; cx += (v[i].x + v[j].x) * cr; cy += (v[i].y + v[j].y) * cr;
-  }
-  if (Math.abs(a) < 1e-6) { // degenerate → mean of vertices
-    let mx = 0, my = 0; for (const pt of v) { mx += pt.x; my += pt.y; }
-    return { x: mx / v.length, y: my / v.length };
-  }
-  a *= 0.5;
-  return { x: cx / (6 * a), y: cy / (6 * a) };
-}
-
-// Reduce a hull to at most `max` vertices by uniform sampling
-function simplifyHull(hull: Vec[], max: number): Vec[] {
-  if (hull.length <= max) return hull;
-  const out: Vec[] = [];
-  for (let i = 0; i < max; i++) out.push(hull[Math.floor((i * hull.length) / max)]);
-  return out;
-}
-
-// Douglas–Peucker polyline simplification (closed contour)
-function douglasPeucker(pts: Vec[], eps: number): Vec[] {
-  if (pts.length < 3) return pts.slice();
-  const keep = new Uint8Array(pts.length);
-  keep[0] = 1; keep[pts.length - 1] = 1;
-  const stack: [number, number][] = [[0, pts.length - 1]];
-  while (stack.length) {
-    const [a, b] = stack.pop()!;
-    const A = pts[a], B = pts[b];
-    const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
-    let dmax = 0, idx = -1;
-    for (let i = a + 1; i < b; i++) {
-      const dist = Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / len;
-      if (dist > dmax) { dmax = dist; idx = i; }
-    }
-    if (dmax > eps && idx > 0) { keep[idx] = 1; stack.push([a, idx]); stack.push([idx, b]); }
-  }
-  const out: Vec[] = [];
-  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
-  return out;
-}
-
-// Trace the concave outline of the largest opaque component (Moore
-// boundary tracing) and simplify it to ≤ maxVerts vertices.
-function traceOutline(
-  d: Uint8ClampedArray, w: number, h: number,
-  minx: number, miny: number, maxx: number, maxy: number,
-  maxVerts: number,
-): Vec[] {
-  const EDGE = 80;
+// Approximate the visible silhouette with a few inscribed circles
+// (greedy max-inscribed-circle packing on a distance transform). A
+// compound of these circles is very stable in Matter and naturally
+// leaves concave notches (e.g. at wing roots).
+function packCircles(d: Uint8ClampedArray, w: number, h: number, maxCircles: number): Circle[] {
+  // mask of the largest opaque component (alpha > 80)
   const mask = new Uint8Array(w * h);
-  for (let p = 0; p < w * h; p++) mask[p] = d[p * 4 + 3] > EDGE ? 1 : 0;
-  // keep only the largest connected component
+  for (let p = 0; p < w * h; p++) mask[p] = d[p * 4 + 3] > 80 ? 1 : 0;
   const lbl = new Int32Array(w * h).fill(-1);
   let best = -1, bestA = 0;
   for (let s = 0; s < w * h; s++) {
-    if (!mask[s] || lbl[s] !== -1) continue;
-    const st = [s]; lbl[s] = s; let a = 0;
-    while (st.length) {
-      const p = st.pop()!; a++;
+    if (!mask[s] || lbl[s] >= 0) continue;
+    const stk = [s]; lbl[s] = s; let a = 0;
+    while (stk.length) {
+      const p = stk.pop()!; a++;
       const px = p % w, py = (p / w) | 0;
-      if (px > 0 && mask[p - 1] && lbl[p - 1] < 0) { lbl[p - 1] = s; st.push(p - 1); }
-      if (px < w - 1 && mask[p + 1] && lbl[p + 1] < 0) { lbl[p + 1] = s; st.push(p + 1); }
-      if (py > 0 && mask[p - w] && lbl[p - w] < 0) { lbl[p - w] = s; st.push(p - w); }
-      if (py < h - 1 && mask[p + w] && lbl[p + w] < 0) { lbl[p + w] = s; st.push(p + w); }
+      if (px > 0 && mask[p - 1] && lbl[p - 1] < 0) { lbl[p - 1] = s; stk.push(p - 1); }
+      if (px < w - 1 && mask[p + 1] && lbl[p + 1] < 0) { lbl[p + 1] = s; stk.push(p + 1); }
+      if (py > 0 && mask[p - w] && lbl[p - w] < 0) { lbl[p - w] = s; stk.push(p - w); }
+      if (py < h - 1 && mask[p + w] && lbl[p + w] < 0) { lbl[p + w] = s; stk.push(p + w); }
     }
     if (a > bestA) { bestA = a; best = s; }
   }
   if (best < 0) return [];
   for (let p = 0; p < w * h; p++) if (lbl[p] !== best) mask[p] = 0;
 
-  // Moore-neighbor boundary trace
-  let sx = -1, sy = -1;
-  for (let y = miny; y <= maxy && sx < 0; y++) for (let x = minx; x <= maxx; x++) if (mask[y * w + x]) { sx = x; sy = y; break; }
-  if (sx < 0) return [];
-  const N = [[-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1]];
-  const isF = (x: number, y: number) => x >= 0 && x < w && y >= 0 && y < h && mask[y * w + x] === 1;
-  const contour: Vec[] = [];
-  let cx = sx, cy = sy, bx = sx - 1, by = sy;
-  let count = 0; const maxC = w * h * 8;
-  do {
-    contour.push({ x: cx + 0.5, y: cy + 0.5 });
-    let di = 0; for (; di < 8; di++) if (cx + N[di][0] === bx && cy + N[di][1] === by) break;
-    let found = false;
-    for (let k = 1; k <= 8; k++) {
-      const idx = (di + k) % 8;
-      const nx = cx + N[idx][0], ny = cy + N[idx][1];
-      if (isF(nx, ny)) {
-        const pidx = (idx + 7) % 8;
-        bx = cx + N[pidx][0]; by = cy + N[pidx][1];
-        cx = nx; cy = ny; found = true; break;
-      }
-    }
-    if (!found) break;
-    count++;
-  } while (!(cx === sx && cy === sy) && count < maxC);
+  // distance transform (two-pass chamfer)
+  const INF = 1e9, dist = new Float64Array(w * h);
+  for (let p = 0; p < w * h; p++) dist[p] = mask[p] ? INF : 0;
+  const relax = (p: number, q: number, c: number) => { if (dist[q] + c < dist[p]) dist[p] = dist[q] + c; };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const p = y * w + x; if (!mask[p]) continue; if (x > 0) relax(p, p - 1, 1); if (y > 0) relax(p, p - w, 1); if (x > 0 && y > 0) relax(p, p - w - 1, 1.4142); if (x < w - 1 && y > 0) relax(p, p - w + 1, 1.4142); }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) { const p = y * w + x; if (!mask[p]) continue; if (x < w - 1) relax(p, p + 1, 1); if (y < h - 1) relax(p, p + w, 1); if (x < w - 1 && y < h - 1) relax(p, p + w + 1, 1.4142); if (x > 0 && y < h - 1) relax(p, p + w - 1, 1.4142); }
 
-  if (contour.length < 6) return [];
-  // simplify, increasing epsilon until vertex budget is met
-  let eps = 2.5;
-  let simp = douglasPeucker(contour, eps);
-  while (simp.length > maxVerts && eps < 24) { eps += 1.5; simp = douglasPeucker(contour, eps); }
-  return simp.length >= 3 ? simp : [];
+  // greedy packing
+  const circles: Circle[] = [];
+  const dwork = Float64Array.from(dist);
+  let firstR = 0;
+  for (let k = 0; k < maxCircles; k++) {
+    let mp = -1, md = 0;
+    for (let p = 0; p < w * h; p++) if (dwork[p] > md) { md = dwork[p]; mp = p; }
+    if (mp < 0) break;
+    if (k === 0) firstR = md;
+    if (md < Math.max(3, firstR * 0.14)) break;
+    const cx = mp % w, cy = (mp / w) | 0;
+    circles.push({ x: cx, y: cy, r: md });
+    const cr2 = md * md;
+    const x0 = Math.max(0, (cx - md) | 0), x1 = Math.min(w - 1, (cx + md) | 0);
+    const y0 = Math.max(0, (cy - md) | 0), y1 = Math.min(h - 1, (cy + md) | 0);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const dx = x - cx, dy = y - cy; if (dx * dx + dy * dy <= cr2) dwork[y * w + x] = 0; }
+  }
+  return circles;
 }
+
 
 // Remove the light cream background AND the grey ground-shadow by
 // flood-filling from the borders inward. A pixel counts as
@@ -414,36 +340,21 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
   }
   if (!any) { minx = 0; miny = 0; maxx = w - 1; maxy = h - 1; }
 
-  // Collision silhouette: gather the left/right extreme opaque pixel of
-  // each (sampled) row, take the convex hull → a polygon that matches
-  // the VISIBLE shape (wings included). Used as the physics body shape.
-  const ALPHA_EDGE = 50;
-  const pts: Vec[] = [];
-  const step = Math.max(1, Math.floor(h / 80));
-  for (let y = 0; y <= maxy; y += step) {
-    let lx = -1, rx = -1;
-    for (let x = minx; x <= maxx; x++) {
-      if (d[(y * w + x) * 4 + 3] > ALPHA_EDGE) { if (lx < 0) lx = x; rx = x; }
-    }
-    if (lx >= 0) { pts.push({ x: lx + 0.5, y: y + 0.5 }); if (rx !== lx) pts.push({ x: rx + 0.5, y: y + 0.5 }); }
+  // Collision shape: pack the visible silhouette with inscribed circles
+  // (stable compound body, with natural notches at wing roots).
+  const packed = packCircles(d, w, h, 8);
+  let cx0 = (minx + maxx + 2) / 2, cy0 = (miny + maxy + 2) / 2;
+  if (packed.length) {
+    // centroid = area-weighted (mass) centre of the circles
+    let area = 0, sx = 0, sy = 0;
+    for (const c of packed) { const a = c.r * c.r; area += a; sx += a * c.x; sy += a * c.y; }
+    cx0 = sx / area; cy0 = sy / area;
   }
-  let hull = simplifyHull(convexHull(pts), 16);
-  if (hull.length < 3) {
-    // fallback: bbox rectangle
-    hull = [
-      { x: minx, y: miny }, { x: maxx, y: miny },
-      { x: maxx, y: maxy }, { x: minx, y: maxy },
-    ];
-  }
-
-  // Concave outline (follows wings/notches); falls back to the hull
-  const outline = traceOutline(d, w, h, minx, miny, maxx, maxy, 28);
-  const shape = outline.length >= 3 ? outline : hull;
-  const ctr = polyCentroid(shape);
+  const circles = packed.map((c) => ({ dx: c.x - cx0, dy: c.y - cy0, r: c.r }));
 
   return {
     canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1,
-    hull, outline, cxh: ctr.x, cyh: ctr.y,
+    circles, cxh: cx0, cyh: cy0,
   };
 }
 
@@ -477,6 +388,7 @@ export default function Game() {
     dropX: CX,
     canDrop: false,
     gameOverFrames: 0,
+    overLineFrames: 0,
     maxLevel: 0,
   });
 
@@ -1250,32 +1162,22 @@ export default function Game() {
       density: 0.002,
       label: `monster_${level}`,
     };
-    // Collision shape = the VISIBLE silhouette. Prefer the concave
-    // outline (follows wings & body-wing notches via convex
-    // decomposition); fall back to the convex hull, then a circle.
+    // Collision shape = a few inscribed circles (compound body). Circles
+    // are the most stable Matter primitive and naturally leave concave
+    // notches (wing roots). Falls back to a single circle.
     let body: import('matter-js').Body | undefined;
     const sp = procRef.current.get(level);
-    if (sp) {
+    if (sp && sp.circles.length >= 1) {
       const s = (2 * m.radius * 1.05) / Math.min(sp.bw, sp.bh);
-      const toVerts = (poly: Vec[]) => poly.map((v) => ({ x: (v.x - sp.cxh) * s, y: (v.y - sp.cyh) * s }));
-      // 1) concave outline (decomposed into convex parts by poly-decomp)
-      if (sp.outline.length >= 3) {
-        try {
-          const b = Matter.Bodies.fromVertices(
-            x, y, [toVerts(sp.outline)] as unknown as import('matter-js').Vector[][], opts, true,
-          );
-          if (b && b.vertices && b.vertices.length >= 3) body = b;
-        } catch { /* fall through */ }
-      }
-      // 2) convex hull
-      if (!body && sp.hull.length >= 3) {
-        try {
-          const hullFn = Matter.Vertices.hull as unknown as (v: Vec[]) => Vec[];
-          const hv = hullFn(toVerts(sp.hull));
-          const b = Matter.Bodies.fromVertices(x, y, [hv] as unknown as import('matter-js').Vector[][], opts);
-          if (b && b.vertices && b.vertices.length >= 3) body = b;
-        } catch { /* fall through */ }
-      }
+      try {
+        if (sp.circles.length === 1) {
+          body = Matter.Bodies.circle(x, y, Math.max(2, sp.circles[0].r * s), opts);
+        } else {
+          const parts = sp.circles.map((c) =>
+            Matter.Bodies.circle(x + c.dx * s, y + c.dy * s, Math.max(2, c.r * s), opts));
+          body = Matter.Body.create({ parts, label: `monster_${level}`, frictionAir: 0.012 });
+        }
+      } catch { /* fall through to circle */ }
     }
     if (!body) body = Matter.Bodies.circle(x, y, m.radius, opts);
     bodyDataRef.current.set(body.id, { monsterId: level, createdAt: Date.now(), isMerging: false });
@@ -1382,12 +1284,6 @@ export default function Game() {
     const Matter = MRef.current ?? (await import('matter-js'));
     MRef.current = Matter;
 
-    // Enable concave decomposition for collision shapes (wings etc.)
-    try {
-      const decomp = await import('poly-decomp');
-      Matter.Common.setDecomp(decomp.default ?? decomp);
-    } catch { /* falls back to convex hull */ }
-
     // Clear old world
     if (engineRef.current) {
       Matter.Engine.clear(engineRef.current as import('matter-js').Engine);
@@ -1406,6 +1302,7 @@ export default function Game() {
     st.dropX          = CX;
     st.canDrop        = true;
     st.gameOverFrames = 0;
+    st.overLineFrames = 0;
     st.maxLevel       = st.currentLevel;
     st.phase          = 'playing';
     coolRef.current   = 0;
@@ -1426,7 +1323,11 @@ export default function Game() {
     Matter.Events.on(engine, 'collisionStart', (event: import('matter-js').IEventCollision<import('matter-js').Engine>) => {
       for (const pair of event.pairs) {
         if (pair.bodyA.isStatic || pair.bodyB.isStatic) continue;
-        handleMerge(Matter, pair.bodyA, pair.bodyB);
+        // compound bodies report child parts → resolve to the parent
+        const a = pair.bodyA.parent ?? pair.bodyA;
+        const b = pair.bodyB.parent ?? pair.bodyB;
+        if (a === b) continue; // internal part-vs-part collision
+        handleMerge(Matter, a, b);
       }
     });
 
@@ -1477,11 +1378,14 @@ export default function Game() {
           const top = b.position.y - MONSTERS[d.monsterId].radius;
           if (top < CEILING_Y) anyOverLine = true;
         }
-        // Require the resting+over-line state to persist briefly to
-        // avoid a one-frame fluke; never trigger while anything moves.
+        // Fast path: fully stopped + over the line.
         if (allResting && anyOverLine) s.gameOverFrames++;
         else s.gameOverFrames = 0;
-        if (s.gameOverFrames > 25) {
+        // Safety net: a block lingering over the line for a sustained
+        // time ends the game even if the pile keeps micro-jittering.
+        if (anyOverLine) s.overLineFrames++;
+        else s.overLineFrames = 0;
+        if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
           s.phase = 'gameover';
           if (s.score > s.highScore) {
             s.highScore = s.score;
