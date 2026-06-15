@@ -125,8 +125,9 @@ interface Vec { x: number; y: number; }
 interface Sprite {
   canvas: HTMLCanvasElement;
   bx: number; by: number; bw: number; bh: number; // opaque bounding box
-  hull: Vec[];                                     // convex hull of the visible silhouette (sprite px)
-  cxh: number; cyh: number;                        // area centroid of the hull (sprite px)
+  hull: Vec[];                                     // convex hull (fallback collision)
+  outline: Vec[];                                  // concave silhouette outline (sprite px)
+  cxh: number; cyh: number;                        // centroid used for render + body alignment
 }
 
 // Convex hull (Andrew's monotone chain), returns CCW order
@@ -171,6 +172,91 @@ function simplifyHull(hull: Vec[], max: number): Vec[] {
   const out: Vec[] = [];
   for (let i = 0; i < max; i++) out.push(hull[Math.floor((i * hull.length) / max)]);
   return out;
+}
+
+// Douglas–Peucker polyline simplification (closed contour)
+function douglasPeucker(pts: Vec[], eps: number): Vec[] {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length);
+  keep[0] = 1; keep[pts.length - 1] = 1;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    const A = pts[a], B = pts[b];
+    const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1;
+    let dmax = 0, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const dist = Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / len;
+      if (dist > dmax) { dmax = dist; idx = i; }
+    }
+    if (dmax > eps && idx > 0) { keep[idx] = 1; stack.push([a, idx]); stack.push([idx, b]); }
+  }
+  const out: Vec[] = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
+// Trace the concave outline of the largest opaque component (Moore
+// boundary tracing) and simplify it to ≤ maxVerts vertices.
+function traceOutline(
+  d: Uint8ClampedArray, w: number, h: number,
+  minx: number, miny: number, maxx: number, maxy: number,
+  maxVerts: number,
+): Vec[] {
+  const EDGE = 80;
+  const mask = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) mask[p] = d[p * 4 + 3] > EDGE ? 1 : 0;
+  // keep only the largest connected component
+  const lbl = new Int32Array(w * h).fill(-1);
+  let best = -1, bestA = 0;
+  for (let s = 0; s < w * h; s++) {
+    if (!mask[s] || lbl[s] !== -1) continue;
+    const st = [s]; lbl[s] = s; let a = 0;
+    while (st.length) {
+      const p = st.pop()!; a++;
+      const px = p % w, py = (p / w) | 0;
+      if (px > 0 && mask[p - 1] && lbl[p - 1] < 0) { lbl[p - 1] = s; st.push(p - 1); }
+      if (px < w - 1 && mask[p + 1] && lbl[p + 1] < 0) { lbl[p + 1] = s; st.push(p + 1); }
+      if (py > 0 && mask[p - w] && lbl[p - w] < 0) { lbl[p - w] = s; st.push(p - w); }
+      if (py < h - 1 && mask[p + w] && lbl[p + w] < 0) { lbl[p + w] = s; st.push(p + w); }
+    }
+    if (a > bestA) { bestA = a; best = s; }
+  }
+  if (best < 0) return [];
+  for (let p = 0; p < w * h; p++) if (lbl[p] !== best) mask[p] = 0;
+
+  // Moore-neighbor boundary trace
+  let sx = -1, sy = -1;
+  for (let y = miny; y <= maxy && sx < 0; y++) for (let x = minx; x <= maxx; x++) if (mask[y * w + x]) { sx = x; sy = y; break; }
+  if (sx < 0) return [];
+  const N = [[-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1]];
+  const isF = (x: number, y: number) => x >= 0 && x < w && y >= 0 && y < h && mask[y * w + x] === 1;
+  const contour: Vec[] = [];
+  let cx = sx, cy = sy, bx = sx - 1, by = sy;
+  let count = 0; const maxC = w * h * 8;
+  do {
+    contour.push({ x: cx + 0.5, y: cy + 0.5 });
+    let di = 0; for (; di < 8; di++) if (cx + N[di][0] === bx && cy + N[di][1] === by) break;
+    let found = false;
+    for (let k = 1; k <= 8; k++) {
+      const idx = (di + k) % 8;
+      const nx = cx + N[idx][0], ny = cy + N[idx][1];
+      if (isF(nx, ny)) {
+        const pidx = (idx + 7) % 8;
+        bx = cx + N[pidx][0]; by = cy + N[pidx][1];
+        cx = nx; cy = ny; found = true; break;
+      }
+    }
+    if (!found) break;
+    count++;
+  } while (!(cx === sx && cy === sy) && count < maxC);
+
+  if (contour.length < 6) return [];
+  // simplify, increasing epsilon until vertex budget is met
+  let eps = 2.5;
+  let simp = douglasPeucker(contour, eps);
+  while (simp.length > maxVerts && eps < 24) { eps += 1.5; simp = douglasPeucker(contour, eps); }
+  return simp.length >= 3 ? simp : [];
 }
 
 // Remove the light cream background AND the grey ground-shadow by
@@ -349,11 +435,15 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
       { x: maxx, y: maxy }, { x: minx, y: maxy },
     ];
   }
-  const ctr = polyCentroid(hull);
+
+  // Concave outline (follows wings/notches); falls back to the hull
+  const outline = traceOutline(d, w, h, minx, miny, maxx, maxy, 28);
+  const shape = outline.length >= 3 ? outline : hull;
+  const ctr = polyCentroid(shape);
 
   return {
     canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1,
-    hull, cxh: ctr.x, cyh: ctr.y,
+    hull, outline, cxh: ctr.x, cyh: ctr.y,
   };
 }
 
@@ -918,38 +1008,40 @@ export default function Game() {
     ctx.fillStyle = 'rgba(4,4,20,0.9)';
     ctx.fillRect(0, 0, W, H);
 
-    // Title panel
-    const bx = 40, by = 54, bw = W - 80, bh = 150;
-    ctx.fillStyle = P.panel;
-    rrect(ctx, bx, by, bw, bh, 10); ctx.fill();
-    ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
-    rrect(ctx, bx, by, bw, bh, 10); ctx.stroke();
-    diamond(ctx, bx, by, 7); diamond(ctx, bx + bw, by, 7);
-    diamond(ctx, bx, by + bh, 7); diamond(ctx, bx + bw, by + bh, 7);
-
-    ctx.textAlign = 'center';
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 11px "Noto Sans JP", serif';
-    ctx.textBaseline = 'top';
-    ctx.fillText('～ Ragnarok Origin ～', CX, by + 14);
-
-    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 20;
-    ctx.fillStyle = P.goldBrt;
-    ctx.font = 'bold 24px "Noto Serif JP", "Yu Mincho", serif';
-    ctx.fillText('スぽりんカゲーム', CX, by + 40);
-    ctx.shadowBlur = 0;
-
-    ctx.strokeStyle = P.gold; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
-    ctx.beginPath(); ctx.moveTo(bx + 20, by + 78); ctx.lineTo(bx + bw - 20, by + 78); ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    ctx.fillStyle = P.text;
-    ctx.font = '11px "Noto Sans JP", sans-serif';
-    ctx.fillText('同じモンスターを合体させて進化！', CX, by + 90);
-    ctx.fillStyle = P.textDim;
-    ctx.font = '10px "Noto Sans JP", sans-serif';
-    ctx.fillText('天井ラインを超えるとゲームオーバー', CX, by + 110);
-    ctx.fillText('「知らない人」同士が合体 → 消滅＆高得点！', CX, by + 128);
+    // Title — no frame, a single eerie line: 「知らない人」
+    {
+      const t = Date.now();
+      const flicker = 0.82 + 0.18 * Math.sin(t * 0.013) + (Math.random() < 0.06 ? -0.25 : 0);
+      const jitter = Math.sin(t * 0.04) * 0.6;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.globalAlpha = Math.max(0.5, Math.min(1, flicker));
+      ctx.font = 'bold 46px "Noto Serif JP", "Yu Mincho", serif';
+      const ty = 132 + jitter;
+      // blood-red glow
+      ctx.shadowColor = 'rgba(180,0,0,0.95)';
+      ctx.shadowBlur = 26;
+      // jagged dark outline
+      ctx.lineJoin = 'miter';
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = '#1a0000';
+      ctx.lineWidth = 6;
+      ctx.strokeText('知らない人', CX, ty);
+      // blood-red gradient fill
+      const g = ctx.createLinearGradient(0, ty - 26, 0, ty + 26);
+      g.addColorStop(0, '#ff5a4a');
+      g.addColorStop(0.5, '#c40000');
+      g.addColorStop(1, '#5e0000');
+      ctx.fillStyle = g;
+      ctx.fillText('知らない人', CX, ty);
+      // faint inner highlight
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha *= 0.25;
+      ctx.fillStyle = '#ff9a8a';
+      ctx.fillText('知らない人', CX, ty - 1);
+      ctx.restore();
+    }
 
     // Name field label (the actual <input> is an HTML overlay)
     ctx.fillStyle = P.gold;
@@ -1158,22 +1250,32 @@ export default function Game() {
       density: 0.002,
       label: `monster_${level}`,
     };
-    // Collision shape = convex hull of the VISIBLE silhouette (so wings
-    // collide and nothing sinks into the body). Falls back to a full
-    // circle until the sprite has been processed.
+    // Collision shape = the VISIBLE silhouette. Prefer the concave
+    // outline (follows wings & body-wing notches via convex
+    // decomposition); fall back to the convex hull, then a circle.
     let body: import('matter-js').Body | undefined;
     const sp = procRef.current.get(level);
-    if (sp && sp.hull.length >= 3) {
+    if (sp) {
       const s = (2 * m.radius * 1.05) / Math.min(sp.bw, sp.bh);
-      const verts = sp.hull.map((v) => ({ x: (v.x - sp.cxh) * s, y: (v.y - sp.cyh) * s }));
-      try {
-        // cast: Matter.Vertices.hull only reads x/y and returns a
-        // correctly-wound convex hull at runtime
-        const hullFn = Matter.Vertices.hull as unknown as (v: Vec[]) => Vec[];
-        const hv = hullFn(verts);
-        const b = Matter.Bodies.fromVertices(x, y, [hv] as unknown as import('matter-js').Vector[][], opts);
-        if (b && b.vertices && b.vertices.length >= 3) body = b;
-      } catch { /* fall through to circle */ }
+      const toVerts = (poly: Vec[]) => poly.map((v) => ({ x: (v.x - sp.cxh) * s, y: (v.y - sp.cyh) * s }));
+      // 1) concave outline (decomposed into convex parts by poly-decomp)
+      if (sp.outline.length >= 3) {
+        try {
+          const b = Matter.Bodies.fromVertices(
+            x, y, [toVerts(sp.outline)] as unknown as import('matter-js').Vector[][], opts, true,
+          );
+          if (b && b.vertices && b.vertices.length >= 3) body = b;
+        } catch { /* fall through */ }
+      }
+      // 2) convex hull
+      if (!body && sp.hull.length >= 3) {
+        try {
+          const hullFn = Matter.Vertices.hull as unknown as (v: Vec[]) => Vec[];
+          const hv = hullFn(toVerts(sp.hull));
+          const b = Matter.Bodies.fromVertices(x, y, [hv] as unknown as import('matter-js').Vector[][], opts);
+          if (b && b.vertices && b.vertices.length >= 3) body = b;
+        } catch { /* fall through */ }
+      }
     }
     if (!body) body = Matter.Bodies.circle(x, y, m.radius, opts);
     bodyDataRef.current.set(body.id, { monsterId: level, createdAt: Date.now(), isMerging: false });
@@ -1279,6 +1381,12 @@ export default function Game() {
 
     const Matter = MRef.current ?? (await import('matter-js'));
     MRef.current = Matter;
+
+    // Enable concave decomposition for collision shapes (wings etc.)
+    try {
+      const decomp = await import('poly-decomp');
+      Matter.Common.setDecomp(decomp.default ?? decomp);
+    } catch { /* falls back to convex hull */ }
 
     // Clear old world
     if (engineRef.current) {
