@@ -1009,21 +1009,29 @@ export default function Game() {
 
       const s = gs.current;
 
-      // Game over detection: settled body above ceiling
+      // Game over detection: only once EVERY body has completely
+      // stopped moving AND at least one rests above the danger line.
       if (s.phase === 'playing') {
         const bodies = Matter.Composite.allBodies(engine.world);
-        let danger = false;
+        const REST_V = 0.45, REST_W = 0.05; // "completely stopped" thresholds
+        let allResting = true;
+        let anyOverLine = false;
         for (const b of bodies) {
           if (b.isStatic) continue;
           const d = bodyDataRef.current.get(b.id);
           if (!d || d.isMerging) continue;
-          if (Date.now() - d.createdAt < 1200) continue;
           const speed = Math.hypot(b.velocity.x, b.velocity.y);
-          const top   = b.position.y - MONSTERS[d.monsterId].radius;
-          if (speed < 2.0 && top < CEILING_Y) { danger = true; break; }
+          if (speed > REST_V || Math.abs(b.angularVelocity) > REST_W) allResting = false;
+          // ignore just-spawned bodies still falling from the top
+          if (Date.now() - d.createdAt < 500) continue;
+          const top = b.position.y - MONSTERS[d.monsterId].radius;
+          if (top < CEILING_Y) anyOverLine = true;
         }
-        s.gameOverFrames = danger ? s.gameOverFrames + 1 : 0;
-        if (s.gameOverFrames > 80) {
+        // Require the resting+over-line state to persist briefly to
+        // avoid a one-frame fluke; never trigger while anything moves.
+        if (allResting && anyOverLine) s.gameOverFrames++;
+        else s.gameOverFrames = 0;
+        if (s.gameOverFrames > 25) {
           s.phase = 'gameover';
           if (s.score > s.highScore) {
             s.highScore = s.score;
@@ -1039,12 +1047,31 @@ export default function Game() {
       drawWalls(ctx);
       drawCeiling(ctx);
 
+      // Pulse factor for the danger outline (visibility)
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.012);
+      const WARN = 22; // px below the line where the warning engages/releases
+
       const allBodies = Matter.Composite.allBodies(engine.world);
       for (const b of allBodies) {
         if (b.isStatic) continue;
         const d = bodyDataRef.current.get(b.id);
         if (!d) continue;
+        const r = MONSTERS[d.monsterId].radius;
         drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle);
+
+        // Red danger outline when the block reaches / nears the GAME
+        // OVER line; released once it drops a bit below it.
+        if (!d.isMerging && (b.position.y - r) < CEILING_Y + WARN) {
+          ctx.save();
+          ctx.strokeStyle = `rgba(255,40,40,${0.55 + 0.45 * pulse})`;
+          ctx.lineWidth = 3;
+          ctx.shadowColor = 'rgba(255,0,0,0.9)';
+          ctx.shadowBlur = 10 + 8 * pulse;
+          ctx.beginPath();
+          ctx.arc(b.position.x, b.position.y, r + 2, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
       }
 
       drawHUD(ctx, s);
