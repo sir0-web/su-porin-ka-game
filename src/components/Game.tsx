@@ -94,7 +94,7 @@ function evoName(lvl: number): string {
 }
 
 // Shared button rects (keep draw + hit-test in sync)
-const START_BTN = { w: 184, h: 46, x: CX - 92, y: 252 };
+const START_BTN = { w: 176, h: 36, x: CX - 88, y: 264 };
 const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
 const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
 const GO_SHOT_BTN = { w: 90, h: 38, x: CX + 2, y: 584 };       // save screenshot
@@ -939,7 +939,7 @@ export default function Game() {
         ['ガ', 'ったいさせたら最後に知らない人がでてきて唖然とした'],
         ['ゲーム', ''],
       ];
-      const x0 = 24, lh = 34, baseY = 64;
+      const x0 = 22, lh = 44, baseY = 70;
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
@@ -947,28 +947,28 @@ export default function Game() {
         const by = baseY + i * lh;
         let x = x0;
         // big red leading character(s)
-        ctx.font = 'bold 27px "Noto Serif JP", "Yu Mincho", serif';
+        ctx.font = 'bold 38px "Noto Serif JP", "Yu Mincho", serif';
         ctx.lineJoin = 'round';
-        ctx.lineWidth = 3.5;
-        ctx.strokeStyle = 'rgba(40,0,0,0.85)';
-        ctx.shadowColor = 'rgba(220,0,0,0.85)';
-        ctx.shadowBlur = 12;
-        const rg = ctx.createLinearGradient(0, by - 24, 0, by + 4);
+        ctx.lineWidth = 4.5;
+        ctx.strokeStyle = 'rgba(40,0,0,0.9)';
+        ctx.shadowColor = 'rgba(230,0,0,0.9)';
+        ctx.shadowBlur = 16;
+        const rg = ctx.createLinearGradient(0, by - 34, 0, by + 6);
         rg.addColorStop(0, '#ff6a5a');
-        rg.addColorStop(1, '#c00000');
+        rg.addColorStop(1, '#bd0000');
         ctx.strokeText(red, x, by);
         ctx.fillStyle = rg;
         ctx.fillText(red, x, by);
-        x += ctx.measureText(red).width + 2;
+        x += ctx.measureText(red).width + 3;
         ctx.shadowBlur = 0;
-        // rest of the line in white
+        // rest of the line in white (kept small so the red title pops)
         if (white) {
-          ctx.font = 'bold 12px "Noto Sans JP", sans-serif';
+          ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
           ctx.lineWidth = 2.5;
-          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.strokeStyle = 'rgba(0,0,0,0.55)';
           ctx.fillStyle = '#f4f4ff';
-          ctx.strokeText(white, x, by - 3);
-          ctx.fillText(white, x, by - 3);
+          ctx.strokeText(white, x, by - 6);
+          ctx.fillText(white, x, by - 6);
         }
       });
       ctx.restore();
@@ -979,7 +979,7 @@ export default function Game() {
     ctx.font = 'bold 10px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('プレイヤー名（任意）', CX, 198);
+    ctx.fillText('プレイヤー名（任意）', CX, 216);
 
     // Start button
     const b = START_BTN;
@@ -989,16 +989,16 @@ export default function Game() {
     rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill();
     ctx.strokeStyle = P.goldBrt; ctx.lineWidth = 1.5;
     rrect(ctx, b.x, b.y, b.w, b.h, 8); ctx.stroke();
-    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 12;
+    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 10;
     ctx.fillStyle = '#fffadc';
-    ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
+    ctx.font = 'bold 14px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('⚔  ゲームスタート  ⚔', CX, b.y + b.h / 2);
     ctx.shadowBlur = 0;
 
     // ── Evolution route panel (3-row snake, big icons + path) ──
-    const ep = { x: 22, y: 300, w: W - 44, h: 180 };
+    const ep = { x: 22, y: 306, w: W - 44, h: 158 };
     ctx.fillStyle = P.panel;
     rrect(ctx, ep.x, ep.y, ep.w, ep.h, 10); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -1013,8 +1013,8 @@ export default function Game() {
     const pad = 20;
     const step = (ep.w - pad * 2) / 4;          // 4 columns
     const colX = (c: number) => ep.x + pad + step * c + step / 2;
-    const rowY = [ep.y + 54, ep.y + 100, ep.y + 146];
-    const pr = 22;
+    const rowY = [ep.y + 46, ep.y + 88, ep.y + 130];
+    const pr = 20;
 
     // snake layout: which (col,row) each level sits at
     const slot = (lvl: number): { c: number; r: number } => {
@@ -1075,7 +1075,7 @@ export default function Game() {
     }
 
     // ── Ranking panel ──────────────────────────────────────────
-    const rx = 22, ry = 490, rw = W - 44, rh = 150;
+    const rx = 22, ry = 470, rw = W - 44, rh = 170;
     ctx.fillStyle = P.panel;
     rrect(ctx, rx, ry, rw, rh, 9); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -1086,7 +1086,7 @@ export default function Game() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText('🏆  ランキング  TOP5', rx + rw / 2, ry + 8);
-    drawRanking(ctx, rx + 6, ry + 26, rw - 12, 24, 5, -1);
+    drawRanking(ctx, rx + 6, ry + 28, rw - 12, 27, 5, -1);
   }, [diamond, drawMonster, drawMystery, drawRanking]);
 
   // ── Game over screen ────────────────────────────────────────
@@ -1672,10 +1672,10 @@ export default function Game() {
             aria-label="プレイヤー名"
             style={{
               position: 'absolute',
-              left: 90,
-              top: 212,
-              width: 220,
-              height: 32,
+              left: 96,
+              top: 228,
+              width: 208,
+              height: 28,
               boxSizing: 'border-box',
               padding: '0 10px',
               background: 'rgba(10,10,30,0.92)',
