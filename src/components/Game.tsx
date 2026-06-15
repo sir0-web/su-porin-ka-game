@@ -388,8 +388,9 @@ export default function Game() {
   const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
   const viewingRef    = useRef<boolean>(false); // gazing at the final board
-  const bgmRef        = useRef<HTMLAudioElement | null>(null);
-  const seGattaiRef   = useRef<HTMLAudioElement | null>(null);
+  const bgmRef              = useRef<HTMLAudioElement | null>(null);
+  const seGattaiRef         = useRef<HTMLAudioElement | null>(null);
+  const seShiranaihitoRef   = useRef<HTMLAudioElement | null>(null);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -416,9 +417,12 @@ export default function Game() {
     bgm.loop = true;
     bgm.volume = 0.4;
     bgmRef.current = bgm;
-    const se = new Audio('/se/gattai.mp3');
+    const se = new Audio('/se/gattai.wav');
     se.volume = 0.7;
     seGattaiRef.current = se;
+    const seS = new Audio('/se/shiranaihito.wav');
+    seS.volume = 0.8;
+    seShiranaihitoRef.current = seS;
     return () => { bgm.pause(); };
   }, []);
 
@@ -1317,8 +1321,13 @@ export default function Game() {
       const gain = base * combo;
       gs.current.score += gain;
 
-      // Merge SE
-      if (seGattaiRef.current) {
+      // Merge SE (知らない人同士の合成は専用SE、それ以外は合体SE)
+      if (level === MAX_LEVEL) {
+        if (seShiranaihitoRef.current) {
+          const clone = seShiranaihitoRef.current.cloneNode() as HTMLAudioElement;
+          clone.play().catch(() => {});
+        }
+      } else if (seGattaiRef.current) {
         const clone = seGattaiRef.current.cloneNode() as HTMLAudioElement;
         clone.play().catch(() => {});
       }
