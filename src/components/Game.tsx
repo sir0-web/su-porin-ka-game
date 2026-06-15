@@ -58,6 +58,11 @@ interface GS {
 
 interface RankEntry { name: string; score: number; maxLevel: number; }
 
+// Floating score / combo popup
+interface Popup { x: number; y: number; text: string; start: number; big: boolean; }
+const COMBO_WINDOW = 850; // ms within which merges count as a combo
+const COMBO_CAP = 9;      // max combo multiplier / display
+
 const RANK_KEY = 'sporinkaRanking';
 const RANK_MAX = 10;
 
@@ -89,7 +94,8 @@ function evoName(lvl: number): string {
 
 // Shared button rects (keep draw + hit-test in sync)
 const START_BTN = { w: 184, h: 46, x: CX - 92, y: 300 };
-const GO_BTN = { w: 184, h: 46, x: CX - 92, y: 560 };
+const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 540 };
+const GO_SHOT_BTN = { w: 184, h: 40, x: CX - 92, y: 592 };
 
 // ─── Rounded rect path ────────────────────────────────────────
 function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -115,10 +121,56 @@ function hexA(hex: string, a: number): string {
 }
 
 // ─── Processed (background-removed) sprite ────────────────────
+interface Vec { x: number; y: number; }
 interface Sprite {
   canvas: HTMLCanvasElement;
   bx: number; by: number; bw: number; bh: number; // opaque bounding box
-  coreR: number;                                   // visible-core radius (sprite px, ~72% alpha mass)
+  hull: Vec[];                                     // convex hull of the visible silhouette (sprite px)
+  cxh: number; cyh: number;                        // area centroid of the hull (sprite px)
+}
+
+// Convex hull (Andrew's monotone chain), returns CCW order
+function convexHull(points: Vec[]): Vec[] {
+  if (points.length < 3) return points.slice();
+  const p = points.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  const cross = (o: Vec, a: Vec, b: Vec) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Vec[] = [];
+  for (const pt of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+    lower.push(pt);
+  }
+  const upper: Vec[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const pt = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+    upper.push(pt);
+  }
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
+}
+
+// Area centroid of a simple polygon
+function polyCentroid(v: Vec[]): Vec {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < v.length; i++) {
+    const j = (i + 1) % v.length;
+    const cr = v[i].x * v[j].y - v[j].x * v[i].y;
+    a += cr; cx += (v[i].x + v[j].x) * cr; cy += (v[i].y + v[j].y) * cr;
+  }
+  if (Math.abs(a) < 1e-6) { // degenerate → mean of vertices
+    let mx = 0, my = 0; for (const pt of v) { mx += pt.x; my += pt.y; }
+    return { x: mx / v.length, y: my / v.length };
+  }
+  a *= 0.5;
+  return { x: cx / (6 * a), y: cy / (6 * a) };
+}
+
+// Reduce a hull to at most `max` vertices by uniform sampling
+function simplifyHull(hull: Vec[], max: number): Vec[] {
+  if (hull.length <= max) return hull;
+  const out: Vec[] = [];
+  for (let i = 0; i < max; i++) out.push(hull[Math.floor((i * hull.length) / max)]);
+  return out;
 }
 
 // Remove the light cream background AND the grey ground-shadow by
@@ -276,41 +328,33 @@ function buildSprite(img: HTMLImageElement, opts: SpriteOpts = {}): Sprite | nul
   }
   if (!any) { minx = 0; miny = 0; maxx = w - 1; maxy = h - 1; }
 
-  // Visible-core radius: alpha-weighted centroid, then the radius that
-  // captures ~72% of the alpha mass (excludes thin edges / wings / aura
-  // wisps) — used to size the collision circle to the visible body.
-  let sumA = 0, sX = 0, sY = 0;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const a = d[(y * w + x) * 4 + 3];
-      if (!a) continue;
-      sumA += a; sX += a * x; sY += a * y;
+  // Collision silhouette: gather the left/right extreme opaque pixel of
+  // each (sampled) row, take the convex hull → a polygon that matches
+  // the VISIBLE shape (wings included). Used as the physics body shape.
+  const ALPHA_EDGE = 50;
+  const pts: Vec[] = [];
+  const step = Math.max(1, Math.floor(h / 80));
+  for (let y = 0; y <= maxy; y += step) {
+    let lx = -1, rx = -1;
+    for (let x = minx; x <= maxx; x++) {
+      if (d[(y * w + x) * 4 + 3] > ALPHA_EDGE) { if (lx < 0) lx = x; rx = x; }
     }
+    if (lx >= 0) { pts.push({ x: lx + 0.5, y: y + 0.5 }); if (rx !== lx) pts.push({ x: rx + 0.5, y: y + 0.5 }); }
   }
-  let coreR = Math.min(maxx - minx + 1, maxy - miny + 1) / 2;
-  if (sumA > 0) {
-    const ccx = sX / sumA, ccy = sY / sumA;
-    const maxd = Math.ceil(Math.hypot(
-      Math.max(maxx - ccx, ccx - minx),
-      Math.max(maxy - ccy, ccy - miny),
-    ));
-    const hist = new Float64Array(maxd + 1);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const a = d[(y * w + x) * 4 + 3];
-        if (!a) continue;
-        const dist = Math.min(maxd, Math.round(Math.hypot(x - ccx, y - ccy)));
-        hist[dist] += a;
-      }
-    }
-    let cum = 0;
-    for (let r = 0; r <= maxd; r++) {
-      cum += hist[r];
-      if (cum >= 0.72 * sumA) { coreR = r; break; }
-    }
+  let hull = simplifyHull(convexHull(pts), 16);
+  if (hull.length < 3) {
+    // fallback: bbox rectangle
+    hull = [
+      { x: minx, y: miny }, { x: maxx, y: miny },
+      { x: maxx, y: maxy }, { x: minx, y: maxy },
+    ];
   }
+  const ctr = polyCentroid(hull);
 
-  return { canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1, coreR };
+  return {
+    canvas: c, bx: minx, by: miny, bw: maxx - minx + 1, bh: maxy - miny + 1,
+    hull, cxh: ctr.x, cyh: ctr.y,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -326,11 +370,13 @@ export default function Game() {
   const coolRef       = useRef<number>(0);
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
-  const colRadiusRef  = useRef<Map<number, number>>(new Map()); // collision radius (canvas px) per level
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
   const rankingRef    = useRef<RankEntry[]>([]);
   const lastRankIdxRef = useRef<number>(-1);
   const playerNameRef = useRef<string>('');
+  const popupsRef     = useRef<Popup[]>([]);
+  const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
+  const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -391,12 +437,13 @@ export default function Game() {
       ctx.fill();
 
       // 2. cover スケールでキャラ本体が円を満たすように拡大し、
-      //    物理ボディの角度で回転（転がる動き）
+      //    物理ボディの角度で回転（転がる動き）。中心は当たり判定
+      //    ポリゴンの重心に合わせる（物理ボディ位置と一致）
       const s   = (2 * r) / Math.min(proc.bw, proc.bh) * 1.05;
       const dw  = proc.canvas.width  * s;
       const dh  = proc.canvas.height * s;
-      const bcx = (proc.bx + proc.bw / 2) * s;
-      const bcy = (proc.by + proc.bh / 2) * s;
+      const bcx = proc.cxh * s;
+      const bcy = proc.cyh * s;
       ctx.translate(x, y);
       ctx.rotate(angle);
       ctx.drawImage(proc.canvas, -bcx, -bcy, dw, dh);
@@ -650,6 +697,46 @@ export default function Game() {
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.closePath();
+  }, []);
+
+  // ── Floating score / combo popups ──────────────────────────
+  const drawPopups = useCallback((ctx: CanvasRenderingContext2D) => {
+    const now = Date.now();
+    const arr = popupsRef.current;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const p = arr[i];
+      const dur = p.big ? 1150 : 950;
+      const e = now - p.start;
+      if (e >= dur) { arr.splice(i, 1); continue; }
+      const t = e / dur;
+      const rise = (p.big ? 50 : 38) * t;
+      let alpha = 1;
+      if (t < 0.14) alpha = t / 0.14;
+      else if (t > 0.62) alpha = 1 - (t - 0.62) / 0.38;
+      let scale = 1;
+      if (t < 0.2) scale = 0.5 + 0.85 * (t / 0.2);
+      else if (t < 0.34) scale = 1.35 - 0.35 * ((t - 0.2) / 0.14);
+
+      ctx.save();
+      ctx.globalAlpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+      ctx.translate(p.x, p.y - rise);
+      ctx.scale(scale, scale);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${p.big ? 22 : 16}px "Noto Sans JP", sans-serif`;
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(40,18,0,0.85)';
+      ctx.lineWidth = p.big ? 5 : 4;
+      ctx.strokeText(p.text, 0, 0);
+      const g = ctx.createLinearGradient(0, -12, 0, 12);
+      if (p.big) { g.addColorStop(0, '#fff0c0'); g.addColorStop(0.5, '#ff9a30'); g.addColorStop(1, '#ff3d20'); }
+      else { g.addColorStop(0, '#fff6d0'); g.addColorStop(0.5, '#ffe070'); g.addColorStop(1, '#ffb020'); }
+      ctx.fillStyle = g;
+      ctx.shadowColor = p.big ? 'rgba(255,120,0,0.9)' : 'rgba(255,200,60,0.8)';
+      ctx.shadowBlur = p.big ? 16 : 10;
+      ctx.fillText(p.text, 0, 0);
+      ctx.restore();
+    }
   }, []);
 
   // ── Draw the cutscene overlay (sparkles + RPG text) ─────────
@@ -940,7 +1027,7 @@ export default function Game() {
     ctx.fillStyle = 'rgba(4,4,20,0.9)';
     ctx.fillRect(0, 0, W, H);
 
-    const bx = 24, by = 38, bw = W - 48, bh = 584;
+    const bx = 24, by = 30, bw = W - 48, bh = 612;
     ctx.fillStyle = P.panel;
     rrect(ctx, bx, by, bw, bh, 12); ctx.fill();
     ctx.strokeStyle = '#800000'; ctx.lineWidth = 2;
@@ -1003,7 +1090,57 @@ export default function Game() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('⚔  もう一度挑戦  ⚔', CX, b.y + b.h / 2);
+
+    // Screenshot button (saves the final board with name + score)
+    const sb = GO_SHOT_BTN;
+    const sg = ctx.createLinearGradient(sb.x, sb.y, sb.x, sb.y + sb.h);
+    sg.addColorStop(0, '#06243a'); sg.addColorStop(0.5, '#1c84b8'); sg.addColorStop(1, '#06243a');
+    ctx.fillStyle = sg;
+    rrect(ctx, sb.x, sb.y, sb.w, sb.h, 8); ctx.fill();
+    ctx.strokeStyle = '#5ec8ff'; ctx.lineWidth = 1.5;
+    rrect(ctx, sb.x, sb.y, sb.w, sb.h, 8); ctx.stroke();
+    ctx.fillStyle = '#e6f6ff';
+    ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('📷  盤面を保存（スクショ）', CX, sb.y + sb.h / 2);
   }, [diamond, drawRanking]);
+
+  // ── Save a screenshot of the final board + name/score watermark ──
+  const saveScreenshot = useCallback(() => {
+    const snap = snapshotRef.current;
+    if (!snap) return;
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const octx = out.getContext('2d');
+    if (!octx) return;
+    octx.drawImage(snap, 0, 0);
+    // Unobtrusive watermark: name + score, bottom-left, semi-transparent
+    const nm = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
+    const label = `${nm}  ${gs.current.score} pts  ｜ スぽりんカゲーム`;
+    octx.font = 'bold 11px "Noto Sans JP", sans-serif';
+    octx.textAlign = 'left';
+    octx.textBaseline = 'bottom';
+    octx.shadowColor = 'rgba(0,0,0,0.7)';
+    octx.shadowBlur = 3;
+    octx.globalAlpha = 0.72;
+    octx.fillStyle = '#ffe9a8';
+    octx.fillText(label, 10, H - 8);
+    octx.globalAlpha = 1;
+    try {
+      out.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sporinka_${gs.current.score}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }, 'image/png');
+    } catch { /* */ }
+  }, []);
 
   // ── Spawn a monster body ────────────────────────────────────
   const spawnMonster = useCallback((
@@ -1013,17 +1150,32 @@ export default function Game() {
   ) => {
     const engine = engineRef.current as import('matter-js').Engine;
     const m = MONSTERS[level];
-    // Collision circle sized to the VISIBLE core (falls back to the
-    // nominal radius until the sprite has been processed).
-    const colR = colRadiusRef.current.get(level) ?? m.radius;
-    const body = Matter.Bodies.circle(x, y, colR, {
+    const opts = {
       restitution: 0.15,
       friction: 0.4,
       frictionStatic: 0.55,
       frictionAir: 0.012,
       density: 0.002,
       label: `monster_${level}`,
-    });
+    };
+    // Collision shape = convex hull of the VISIBLE silhouette (so wings
+    // collide and nothing sinks into the body). Falls back to a full
+    // circle until the sprite has been processed.
+    let body: import('matter-js').Body | undefined;
+    const sp = procRef.current.get(level);
+    if (sp && sp.hull.length >= 3) {
+      const s = (2 * m.radius * 1.05) / Math.min(sp.bw, sp.bh);
+      const verts = sp.hull.map((v) => ({ x: (v.x - sp.cxh) * s, y: (v.y - sp.cyh) * s }));
+      try {
+        // cast: Matter.Vertices.hull only reads x/y and returns a
+        // correctly-wound convex hull at runtime
+        const hullFn = Matter.Vertices.hull as unknown as (v: Vec[]) => Vec[];
+        const hv = hullFn(verts);
+        const b = Matter.Bodies.fromVertices(x, y, [hv] as unknown as import('matter-js').Vector[][], opts);
+        if (b && b.vertices && b.vertices.length >= 3) body = b;
+      } catch { /* fall through to circle */ }
+    }
+    if (!body) body = Matter.Bodies.circle(x, y, m.radius, opts);
     bodyDataRef.current.set(body.id, { monsterId: level, createdAt: Date.now(), isMerging: false });
     if (level > gs.current.maxLevel) gs.current.maxLevel = level;
     Matter.Composite.add(engine.world, body);
@@ -1061,8 +1213,25 @@ export default function Game() {
       mergingRef.current.delete(bodyA.id);
       mergingRef.current.delete(bodyB.id);
 
+      // Combo: merges within a short window of each other chain up
+      const now = Date.now();
+      if (now - comboRef.current.lastTime < COMBO_WINDOW) comboRef.current.count++;
+      else comboRef.current.count = 1;
+      comboRef.current.lastTime = now;
+      const combo = Math.min(comboRef.current.count, COMBO_CAP);
+
+      const base = level === MAX_LEVEL ? SPECIAL_MERGE_SCORE : MONSTERS[level + 1].score;
+      const gain = base * combo;
+      gs.current.score += gain;
+
+      // Floating popups (juicy feedback)
+      popupsRef.current.push({ x: mx, y: my, text: `+${gain}`, start: now, big: level === MAX_LEVEL });
+      if (combo >= 2) {
+        popupsRef.current.push({ x: mx, y: my - 30, text: `${combo} COMBO!`, start: now, big: true });
+      }
+
       if (level === MAX_LEVEL) {
-        gs.current.score += SPECIAL_MERGE_SCORE;
+        // special merge: both vanish, no new body
       } else {
         const nextLevel = level + 1;
         const newBody = spawnMonster(Matter, mx, Math.max(my, CEILING_Y + MONSTERS[nextLevel].radius), nextLevel);
@@ -1071,7 +1240,6 @@ export default function Game() {
           y: -2.5,
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
-        gs.current.score += MONSTERS[nextLevel].score;
         // 知らない人 が初めて誕生した瞬間の演出
         if (nextLevel === MAX_LEVEL) triggerSecretFx();
       }
@@ -1134,6 +1302,9 @@ export default function Game() {
     st.phase          = 'playing';
     coolRef.current   = 0;
     secretFxRef.current = null;
+    popupsRef.current = [];
+    comboRef.current = { count: 0, lastTime: 0 };
+    snapshotRef.current = null;
 
     // Physics world
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
@@ -1184,7 +1355,7 @@ export default function Game() {
       // stopped moving AND at least one rests above the danger line.
       if (s.phase === 'playing') {
         const bodies = Matter.Composite.allBodies(engine.world);
-        const REST_V = 0.45, REST_W = 0.05; // "completely stopped" thresholds
+        const REST_V = 0.6, REST_W = 0.08; // "completely stopped" thresholds (polygon-friendly)
         let allResting = true;
         let anyOverLine = false;
         for (const b of bodies) {
@@ -1251,13 +1422,24 @@ export default function Game() {
       }
 
       drawHUD(ctx, s);
+
+      // Capture the final board ONCE for the screenshot (before the
+      // game-over overlay is drawn over it)
+      if (s.phase === 'gameover' && !snapshotRef.current) {
+        const snap = document.createElement('canvas');
+        snap.width = W; snap.height = H;
+        snap.getContext('2d')?.drawImage(canvas, 0, 0);
+        snapshotRef.current = snap;
+      }
+
+      drawPopups(ctx);
       drawSecretFx(ctx);
       if (s.phase === 'gameover') drawGameOver(ctx, s);
 
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawSecretFx, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawPopups, drawSecretFx, handleMerge]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
@@ -1266,13 +1448,7 @@ export default function Game() {
       img.onload = () => {
         try {
           const sp = buildSprite(img, { keepLargest: m.keepLargest, erase: m.erase });
-          if (sp) {
-            procRef.current.set(m.id, sp);
-            // collision radius = visible core, mapped to the render scale
-            const renderScale = (2 * m.radius * 1.05) / Math.min(sp.bw, sp.bh);
-            const col = sp.coreR * renderScale;
-            colRadiusRef.current.set(m.id, Math.max(0.5 * m.radius, Math.min(m.radius, col)));
-          }
+          if (sp) procRef.current.set(m.id, sp);
         } catch { /* keep gradient fallback */ }
       };
       img.src = m.imageSrc;
@@ -1359,11 +1535,13 @@ export default function Game() {
       if (inBtn(GO_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
+      } else if (inBtn(GO_SHOT_BTN)) {
+        saveScreenshot();
       }
     } else {
       drop();
     }
-  }, [initGame, drop]);
+  }, [initGame, drop, saveScreenshot]);
 
   return (
     <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>

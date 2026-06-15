@@ -185,6 +185,10 @@ export const MONSTERS: MonsterDef[] = [
   },
 ];
 
+// Global block-size scale (shrink every monster to 90%)
+const BLOCK_SCALE = 0.9;
+for (const m of MONSTERS) m.radius = m.radius * BLOCK_SCALE;
+
 export const MAX_LEVEL = MONSTERS.length - 1;
 export const SPECIAL_MERGE_SCORE = 2000;
 
