@@ -388,6 +388,8 @@ export default function Game() {
   const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
   const viewingRef    = useRef<boolean>(false); // gazing at the final board
+  const bgmRef        = useRef<HTMLAudioElement | null>(null);
+  const seGattaiRef   = useRef<HTMLAudioElement | null>(null);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -407,6 +409,18 @@ export default function Game() {
 
   // Load saved ranking once on mount
   useEffect(() => { rankingRef.current = loadRanking(); }, []);
+
+  // Load audio assets
+  useEffect(() => {
+    const bgm = new Audio('/bgm/top.mp3');
+    bgm.loop = true;
+    bgm.volume = 0.4;
+    bgmRef.current = bgm;
+    const se = new Audio('/se/gattai.mp3');
+    se.volume = 0.7;
+    seGattaiRef.current = se;
+    return () => { bgm.pause(); };
+  }, []);
 
   // ── Diamond ornament ────────────────────────────────────────
   const diamond = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, s: number) => {
@@ -1303,6 +1317,12 @@ export default function Game() {
       const gain = base * combo;
       gs.current.score += gain;
 
+      // Merge SE
+      if (seGattaiRef.current) {
+        const clone = seGattaiRef.current.cloneNode() as HTMLAudioElement;
+        clone.play().catch(() => {});
+      }
+
       // Floating popups (juicy feedback)
       popupsRef.current.push({ x: mx, y: my, text: `+${gain}`, start: now, big: level === MAX_LEVEL });
       if (combo >= 2) {
@@ -1413,6 +1433,8 @@ export default function Game() {
     if (!ctx) return;
 
     setUiPhase('playing');
+    const bgm = bgmRef.current;
+    if (bgm) { bgm.currentTime = 0; bgm.play().catch(() => {}); }
 
     let last = 0;
     const loop = (ts: number) => {
@@ -1463,6 +1485,7 @@ export default function Game() {
         else s.overLineFrames = 0;
         if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
           s.phase = 'gameover';
+          bgmRef.current?.pause();
           if (s.score > s.highScore) {
             s.highScore = s.score;
             try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
