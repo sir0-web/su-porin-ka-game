@@ -195,9 +195,9 @@ export const SPECIAL_MERGE_SCORE = 2000;
 // Only levels 0-4 can appear as initial drops
 export function getRandomStartLevel(): number {
   const rand = Math.random();
-  if (rand < 0.35) return 0;
-  if (rand < 0.60) return 1;
-  if (rand < 0.80) return 2;
-  if (rand < 0.93) return 3;
-  return 4;
+  if (rand < 0.25) return 0;  // 25% (was 35%)
+  if (rand < 0.50) return 1;  // 25%
+  if (rand < 0.72) return 2;  // 22% (was 20%)
+  if (rand < 0.90) return 3;  // 18% (was 13%)
+  return 4;                   // 10% (was 7%)
 }
