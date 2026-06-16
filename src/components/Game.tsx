@@ -403,6 +403,8 @@ export default function Game() {
   const [seOn,  setSeOn]    = useState(true);
   const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto'>(null);
   const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto'>(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef         = useRef(false);
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -1158,6 +1160,25 @@ export default function Game() {
     button(GO_VSHOT_BTN, '📷 保存', '#5ec8ff');
   }, []);
 
+  // ── Pause overlay ───────────────────────────────────────────────
+  const drawPauseOverlay = useCallback((ctx: CanvasRenderingContext2D) => {
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,4,20,0.72)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = P.gold;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = P.goldBrt;
+    ctx.font = 'bold 38px "Noto Serif JP", serif';
+    ctx.fillText('⏸  P A U S E', CX, H / 2 - 18);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = P.textDim;
+    ctx.font = '13px "Noto Sans JP", sans-serif';
+    ctx.fillText('ポーズボタンを押して再開', CX, H / 2 + 28);
+    ctx.restore();
+  }, []);
+
   // ── Save a screenshot of the final board + name/score watermark ──
   const saveScreenshot = useCallback(() => {
     const snap = snapshotRef.current;
@@ -1338,6 +1359,18 @@ export default function Game() {
     setTimeout(() => { gs.current.canDrop = true; }, DROP_COOLDOWN);
   }, [spawnMonster]);
 
+  // ── Pause toggle ────────────────────────────────────────────
+  const togglePause = useCallback(() => {
+    const newVal = !isPausedRef.current;
+    isPausedRef.current = newVal;
+    setIsPaused(newVal);
+    if (newVal) {
+      bgmRef.current?.pause();
+    } else if (bgmOnRef.current && gs.current.phase === 'playing') {
+      bgmRef.current?.play().catch(() => {});
+    }
+  }, []);
+
   // ── Initialize / restart game ───────────────────────────────
   const initGame = useCallback(async () => {
     cancelAnimationFrame(rafRef.current);
@@ -1372,6 +1405,8 @@ export default function Game() {
     comboRef.current = { count: 0, lastTime: 0 };
     snapshotRef.current = null;
     viewingRef.current = false;
+    isPausedRef.current = false;
+    setIsPaused(false);
 
     // Physics world
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
@@ -1409,65 +1444,67 @@ export default function Game() {
     const loop = (ts: number) => {
       const dt = Math.min(ts - last, 33);
       last = ts;
-      Matter.Engine.update(engine, dt > 0 ? dt : 16);
-
-      // Safety clamp: stop any body from "flying away" (runaway
-      // velocity / spin from collision resolution)
-      const MAXV = 32, MAXW = 0.5;
-      for (const b of Matter.Composite.allBodies(engine.world)) {
-        if (b.isStatic) continue;
-        const sp = Math.hypot(b.velocity.x, b.velocity.y);
-        if (sp > MAXV) {
-          Matter.Body.setVelocity(b, { x: (b.velocity.x / sp) * MAXV, y: (b.velocity.y / sp) * MAXV });
-        }
-        if (b.angularVelocity > MAXW || b.angularVelocity < -MAXW) {
-          Matter.Body.setAngularVelocity(b, Math.max(-MAXW, Math.min(MAXW, b.angularVelocity)));
-        }
-      }
-
       const s = gs.current;
 
-      // Game over detection: only once EVERY body has completely
-      // stopped moving AND at least one rests above the danger line.
-      if (s.phase === 'playing') {
-        const bodies = Matter.Composite.allBodies(engine.world);
-        const REST_V = 0.6, REST_W = 0.08; // "completely stopped" thresholds (polygon-friendly)
-        let allResting = true;
-        let anyOverLine = false;
-        for (const b of bodies) {
+      if (!isPausedRef.current) {
+        Matter.Engine.update(engine, dt > 0 ? dt : 16);
+
+        // Safety clamp: stop any body from "flying away" (runaway
+        // velocity / spin from collision resolution)
+        const MAXV = 32, MAXW = 0.5;
+        for (const b of Matter.Composite.allBodies(engine.world)) {
           if (b.isStatic) continue;
-          const d = bodyDataRef.current.get(b.id);
-          if (!d || d.isMerging) continue;
-          const speed = Math.hypot(b.velocity.x, b.velocity.y);
-          if (speed > REST_V || Math.abs(b.angularVelocity) > REST_W) allResting = false;
-          // ignore just-spawned bodies still falling from the top
-          if (Date.now() - d.createdAt < 500) continue;
-          const top = b.position.y - MONSTERS[d.monsterId].radius;
-          if (top < CEILING_Y) anyOverLine = true;
-        }
-        // Fast path: fully stopped + over the line.
-        if (allResting && anyOverLine) s.gameOverFrames++;
-        else s.gameOverFrames = 0;
-        // Safety net: a block lingering over the line for a sustained
-        // time ends the game even if the pile keeps micro-jittering.
-        if (anyOverLine) s.overLineFrames++;
-        else s.overLineFrames = 0;
-        if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
-          s.phase = 'gameover';
-          bgmRef.current?.pause();
-          const go = bgmGameoverRef.current;
-          if (go && bgmOnRef.current) { go.currentTime = 0; go.play().catch(() => {}); }
-          if (s.score > s.highScore) {
-            s.highScore = s.score;
-            try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
+          const sp = Math.hypot(b.velocity.x, b.velocity.y);
+          if (sp > MAXV) {
+            Matter.Body.setVelocity(b, { x: (b.velocity.x / sp) * MAXV, y: (b.velocity.y / sp) * MAXV });
           }
-          // Record this run in the ranking
-          const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-          const { list, index } = insertRanking({ name, score: s.score, maxLevel: s.maxLevel });
-          rankingRef.current = list;
-          lastRankIdxRef.current = index;
-          viewingRef.current = false;
-          setUiPhase('gameover');
+          if (b.angularVelocity > MAXW || b.angularVelocity < -MAXW) {
+            Matter.Body.setAngularVelocity(b, Math.max(-MAXW, Math.min(MAXW, b.angularVelocity)));
+          }
+        }
+
+        // Game over detection: only once EVERY body has completely
+        // stopped moving AND at least one rests above the danger line.
+        if (s.phase === 'playing') {
+          const bodies = Matter.Composite.allBodies(engine.world);
+          const REST_V = 0.6, REST_W = 0.08; // "completely stopped" thresholds (polygon-friendly)
+          let allResting = true;
+          let anyOverLine = false;
+          for (const b of bodies) {
+            if (b.isStatic) continue;
+            const d = bodyDataRef.current.get(b.id);
+            if (!d || d.isMerging) continue;
+            const speed = Math.hypot(b.velocity.x, b.velocity.y);
+            if (speed > REST_V || Math.abs(b.angularVelocity) > REST_W) allResting = false;
+            // ignore just-spawned bodies still falling from the top
+            if (Date.now() - d.createdAt < 500) continue;
+            const top = b.position.y - MONSTERS[d.monsterId].radius;
+            if (top < CEILING_Y) anyOverLine = true;
+          }
+          // Fast path: fully stopped + over the line.
+          if (allResting && anyOverLine) s.gameOverFrames++;
+          else s.gameOverFrames = 0;
+          // Safety net: a block lingering over the line for a sustained
+          // time ends the game even if the pile keeps micro-jittering.
+          if (anyOverLine) s.overLineFrames++;
+          else s.overLineFrames = 0;
+          if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
+            s.phase = 'gameover';
+            bgmRef.current?.pause();
+            const go = bgmGameoverRef.current;
+            if (go && bgmOnRef.current) { go.currentTime = 0; go.play().catch(() => {}); }
+            if (s.score > s.highScore) {
+              s.highScore = s.score;
+              try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
+            }
+            // Record this run in the ranking
+            const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
+            const { list, index } = insertRanking({ name, score: s.score, maxLevel: s.maxLevel });
+            rankingRef.current = list;
+            lastRankIdxRef.current = index;
+            viewingRef.current = false;
+            setUiPhase('gameover');
+          }
         }
       }
 
@@ -1522,10 +1559,12 @@ export default function Game() {
         else drawGameOver(ctx, s);
       }
 
+      if (isPausedRef.current && s.phase === 'playing') drawPauseOverlay(ctx);
+
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawSecretFx, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawSecretFx, drawPauseOverlay, handleMerge]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
@@ -1667,6 +1706,48 @@ export default function Game() {
             handleClick(t.clientX, t.clientY);
           }}
         />
+        {/* Overlay buttons */}
+        {(() => {
+          const btnBase: React.CSSProperties = {
+            position: 'absolute',
+            top: 6,
+            width: 36,
+            height: 36,
+            background: 'rgba(6,6,28,0.88)',
+            border: '1.5px solid #c8a030',
+            borderRadius: 8,
+            color: '#f0e0b0',
+            fontSize: 18,
+            cursor: 'pointer',
+            zIndex: 5,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            lineHeight: '1',
+          };
+          const soundOn = bgmOn && seOn;
+          return (
+            <>
+              {/* サウンドON/OFF（全フェーズ共通） */}
+              <button
+                style={{ ...btnBase, right: 6 }}
+                onClick={() => { const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
+              >
+                {soundOn ? '🔊' : '🔇'}
+              </button>
+              {/* 一時停止（ゲーム中のみ） */}
+              {uiPhase === 'playing' && (
+                <button
+                  style={{ ...btnBase, right: 48 }}
+                  onClick={togglePause}
+                >
+                  {isPaused ? '▶' : '⏸'}
+                </button>
+              )}
+            </>
+          );
+        })()}
         {modal !== null && (() => {
           const closeModal = () => { modalRef.current = null; setModal(null); };
           const panelStyle: React.CSSProperties = {

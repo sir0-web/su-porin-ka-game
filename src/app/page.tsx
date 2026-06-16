@@ -25,7 +25,6 @@ export default function Page() {
           paddingBottom: 8,
         }}
       >
-        Inspired by Suika Game × Ragnarok Origin
       </div>
     </main>
   );
