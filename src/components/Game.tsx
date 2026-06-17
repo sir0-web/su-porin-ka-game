@@ -88,16 +88,54 @@ function insertRanking(entry: RankEntry): { list: RankEntry[]; index: number } {
   return { list: trimmed, index };
 }
 
+const PLAYER_NAME_KEY = 'sporinkaPlayerName';
+
+// Fetch the shared online ranking; falls back to the local one on failure.
+async function fetchGlobalRanking(): Promise<RankEntry[]> {
+  try {
+    const res = await fetch('/api/ranking');
+    if (!res.ok) throw new Error('bad response');
+    const data = await res.json();
+    return Array.isArray(data) ? data : loadRanking();
+  } catch {
+    return loadRanking();
+  }
+}
+
+// Submit a run to the shared online ranking; falls back to the local
+// ranking (and its index) on failure.
+async function submitGlobalRanking(entry: RankEntry): Promise<{ list: RankEntry[]; index: number }> {
+  try {
+    const res = await fetch('/api/ranking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    });
+    if (!res.ok) throw new Error('bad response');
+    const list = await res.json();
+    if (!Array.isArray(list)) throw new Error('bad payload');
+    const index = list.findIndex((e: RankEntry) => e.name === entry.name && e.score === entry.score);
+    return { list, index };
+  } catch {
+    return insertRanking(entry);
+  }
+}
+
 // Display name for an evolution level — the secret monster is masked
 function evoName(lvl: number): string {
   return lvl >= MAX_LEVEL ? '？？？' : MONSTERS[lvl].name;
 }
 
 // TOP menu button rects
-const MENU_START_BTN = { w: 260, h: 52, x: CX - 130, y: 222 };
-const MENU_RANK_BTN  = { w: 230, h: 44, x: CX - 115, y: 288 };
-const MENU_SET_BTN   = { w: 230, h: 44, x: CX - 115, y: 344 };
-const MENU_HOW_BTN   = { w: 230, h: 44, x: CX - 115, y: 400 };
+// プレイヤー名ラベル＋入力欄（スタートボタンの上）の領域
+const NAME_LABEL_Y   = 228;
+const NAME_INPUT_TOP = 240;
+const NAME_INPUT_H   = 34;
+
+const MENU_START_BTN = { w: 260, h: 52, x: CX - 130, y: 288 };
+const MENU_RANK_BTN  = { w: 230, h: 44, x: CX - 115, y: 354 };
+const MENU_SET_BTN   = { w: 230, h: 44, x: CX - 115, y: 410 };
+const MENU_HOW_BTN   = { w: 230, h: 44, x: CX - 115, y: 466 };
 // In-game / game-over button rects
 const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
 const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
@@ -405,6 +443,8 @@ export default function Game() {
   const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto'>(null);
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
+  const [, setRankingTick]  = useState(0);
+  const [playerNameInput, setPlayerNameInput] = useState('');
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -421,8 +461,23 @@ export default function Game() {
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');
 
-  // Load saved ranking once on mount
-  useEffect(() => { rankingRef.current = loadRanking(); }, []);
+  // Load the saved player name once on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(PLAYER_NAME_KEY) ?? '';
+      playerNameRef.current = saved;
+      setPlayerNameInput(saved);
+    } catch { /* */ }
+  }, []);
+
+  // Load the shared ranking once on mount (falls back to local on failure)
+  useEffect(() => {
+    rankingRef.current = loadRanking();
+    fetchGlobalRanking().then((list) => {
+      rankingRef.current = list;
+      setRankingTick((t) => t + 1);
+    });
+  }, []);
 
   // Load audio assets
   useEffect(() => {
@@ -1058,6 +1113,13 @@ export default function Game() {
       ctx.shadowBlur = 0;
     };
 
+    // Player name label (the editable input itself is an HTML overlay)
+    ctx.fillStyle = P.gold;
+    ctx.font = '11px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('プレイヤー名（ランキング表示用）', CX, NAME_LABEL_Y);
+
     menuBtn(MENU_START_BTN, '⚔  ゲームスタート  ⚔', true);
     menuBtn(MENU_RANK_BTN,  '🏆  ランキング', false);
     menuBtn(MENU_SET_BTN,   '⚙  セッティング', false);
@@ -1497,13 +1559,21 @@ export default function Game() {
               s.highScore = s.score;
               try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
             }
-            // Record this run in the ranking
+            // Record this run in the ranking — show the local result
+            // immediately, then replace it with the shared online result
+            // once the submission resolves.
             const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-            const { list, index } = insertRanking({ name, score: s.score, maxLevel: s.maxLevel });
-            rankingRef.current = list;
-            lastRankIdxRef.current = index;
+            const entry = { name, score: s.score, maxLevel: s.maxLevel };
+            const local = insertRanking(entry);
+            rankingRef.current = local.list;
+            lastRankIdxRef.current = local.index;
             viewingRef.current = false;
             setUiPhase('gameover');
+            submitGlobalRanking(entry).then(({ list, index }) => {
+              rankingRef.current = list;
+              lastRankIdxRef.current = index;
+              setRankingTick((t) => t + 1);
+            });
           }
         }
       }
@@ -1748,6 +1818,38 @@ export default function Game() {
             </>
           );
         })()}
+        {/* プレイヤー名入力（TOP画面のみ） */}
+        {uiPhase === 'start' && modal === null && (
+          <input
+            type="text"
+            value={playerNameInput}
+            maxLength={10}
+            placeholder="ぼうけんしゃ"
+            onChange={(e) => {
+              const v = e.target.value;
+              setPlayerNameInput(v);
+              playerNameRef.current = v;
+              try { localStorage.setItem(PLAYER_NAME_KEY, v); } catch { /* */ }
+            }}
+            style={{
+              position: 'absolute',
+              top: NAME_INPUT_TOP,
+              left: CX - 115,
+              width: 230,
+              height: NAME_INPUT_H,
+              background: 'rgba(6,6,28,0.88)',
+              border: '1.5px solid #c8a030',
+              borderRadius: 8,
+              color: '#f0e0b0',
+              fontSize: 14,
+              textAlign: 'center',
+              outline: 'none',
+              fontFamily: '"Noto Sans JP", sans-serif',
+              boxSizing: 'border-box',
+              zIndex: 5,
+            }}
+          />
+        )}
         {modal !== null && (() => {
           const closeModal = () => { modalRef.current = null; setModal(null); };
           const panelStyle: React.CSSProperties = {
