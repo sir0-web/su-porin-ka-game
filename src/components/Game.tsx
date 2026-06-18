@@ -10,9 +10,10 @@ import {
 
 // ─── Canvas dimensions ─────────────────────────────────────────
 const W = 400;
-const H = 660;
 const WALL = 14;
-const FLOOR_Y = H - WALL;
+const FLOOR_Y = 646;            // play-field floor (blocks rest here)
+const BHUD_Y = FLOOR_Y + WALL;  // top of the bottom HUD bar (660)
+const H = 732;                  // canvas height incl. the bottom HUD bar
 const CEILING_Y = 118;
 const DROP_Y = 68;
 const GL = WALL;
@@ -752,33 +753,8 @@ export default function Game() {
   const drawHUD = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
     const py = 6, ph = CEILING_Y - 12;
 
-    // Score panel
-    const sx = GL + 4, sw = 116;
-    ctx.fillStyle = P.panel;
-    rrect(ctx, sx, py, sw, ph, 5); ctx.fill();
-    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, sx, py, sw, ph, 5); ctx.stroke();
-    ctx.fillStyle = P.gold; rrect(ctx, sx, py, sw, 3, 3); ctx.fill();
-
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-    ctx.fillText('S C O R E', sx + 8, py + 8);
-
-    const scoreStr = String(st.score);
-    ctx.fillStyle = P.text;
-    ctx.font = `bold ${scoreStr.length > 6 ? 14 : 18}px "Oswald", "Arial Narrow", sans-serif`;
-    ctx.fillText(scoreStr, sx + 8, py + 20);
-
-    ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-    ctx.fillText('B E S T', sx + 8, py + 44);
-    ctx.fillStyle = P.textDim;
-    ctx.font = '12px "Oswald", "Arial Narrow", sans-serif';
-    ctx.fillText(String(st.highScore), sx + 8, py + 55);
-
-    // Next monster panel
-    const nw = 80, nx = GR - 4 - nw;
+    // ── Top-left: NEXT panel (moved here from the right) ──
+    const nw = 84, nx = GL + 4;
     ctx.fillStyle = P.panel;
     rrect(ctx, nx, py, nw, ph, 5); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -816,7 +792,7 @@ export default function Game() {
     ctx.textBaseline = 'middle';
     ctx.fillText(nameShort, nx + nw / 2, pillY + pillH / 2 + 0.5);
 
-    // Current monster at drop position
+    // ── Current monster at drop position ──
     if (st.phase === 'playing') {
       drawMonster(ctx, st.dropX, DROP_Y, st.currentLevel);
       if (st.canDrop) {
@@ -832,6 +808,66 @@ export default function Game() {
         ctx.restore();
       }
     }
+
+    // ── Bottom HUD bar: BEST | SCORE | 最大進化 ──
+    const bX = GL + 4, bW = GW - 8;
+    const bY = BHUD_Y + 4, bH = H - bY - 8;
+    ctx.fillStyle = P.panel;
+    rrect(ctx, bX, bY, bW, bH, 6); ctx.fill();
+    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
+    rrect(ctx, bX, bY, bW, bH, 6); ctx.stroke();
+    ctx.fillStyle = P.gold; rrect(ctx, bX, bY, bW, 3, 3); ctx.fill();
+
+    // three cells: BEST (left) | SCORE (centre) | 最大進化 (right)
+    const w1 = bW * 0.27, w2 = bW * 0.36, w3 = bW - w1 - w2;
+    const x1 = bX, x2 = bX + w1, x3 = bX + w1 + w2;
+
+    ctx.strokeStyle = 'rgba(120,100,200,0.3)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x2, bY + 8); ctx.lineTo(x2, bY + bH - 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x3, bY + 8); ctx.lineTo(x3, bY + bH - 8); ctx.stroke();
+
+    const labelY = bY + 9;
+    const valY = bY + bH / 2 + 6;
+    ctx.textAlign = 'center';
+
+    // BEST
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
+    ctx.fillText('B E S T', x1 + w1 / 2, labelY);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = P.textDim;
+    ctx.font = 'bold 18px "Oswald", "Arial Narrow", sans-serif';
+    ctx.fillText(String(st.highScore), x1 + w1 / 2, valY);
+
+    // SCORE (primary)
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
+    ctx.fillText('S C O R E', x2 + w2 / 2, labelY);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = P.text;
+    const scoreStr = String(st.score);
+    ctx.font = `bold ${scoreStr.length > 6 ? 22 : 28}px "Oswald", "Arial Narrow", sans-serif`;
+    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 8;
+    ctx.fillText(scoreStr, x2 + w2 / 2, valY);
+    ctx.shadowBlur = 0;
+
+    // 最大進化
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
+    ctx.fillText('最大進化', x3 + w3 / 2, labelY);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffe9a8';
+    const ev = evoName(st.maxLevel);
+    const evShort = ev.length > 7 ? ev.slice(0, 7) : ev;
+    let efs = 14;
+    ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
+    while (ctx.measureText(evShort).width > w3 - 10 && efs > 9) {
+      efs -= 1; ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
+    }
+    ctx.fillText(evShort, x3 + w3 / 2, valY);
   }, [drawMonster]);
 
   // 4-pointed sparkle star path
@@ -1661,7 +1697,7 @@ export default function Game() {
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
     engineRef.current = engine;
 
-    const ground = Matter.Bodies.rectangle(CX, H + 30, W + 40, 80,       { isStatic: true, label: 'ground', friction: 0.6 });
+    const ground = Matter.Bodies.rectangle(CX, FLOOR_Y + 40, W + 40, 80,  { isStatic: true, label: 'ground', friction: 0.6 });
     const leftW  = Matter.Bodies.rectangle(GL / 2, H / 2, WALL + 2, H*2, { isStatic: true, label: 'wall',   friction: 0.4 });
     const rightW = Matter.Bodies.rectangle(GR + WALL/2, H/2, WALL+2, H*2,{ isStatic: true, label: 'wall',   friction: 0.4 });
     Matter.Composite.add(engine.world, [ground, leftW, rightW]);
