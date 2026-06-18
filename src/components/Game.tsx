@@ -1301,10 +1301,10 @@ export default function Game() {
 
   // ── Start screen ────────────────────────────────────────────
   const drawStart = useCallback((ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = 'rgba(4,4,20,0.92)';
-    ctx.fillRect(0, 0, W, H);
+    // No dark overlay — the background image shows through; only the text
+    // and (semi-transparent) UI are drawn.
 
-    // Acrostic title (big red leading chars read downward = スイガゲーム)
+    // Acrostic title (big leading chars read downward = スイガゲーム)
     {
       const lines: [string, string][] = [
         ['ス', 'ごい'],
@@ -1322,12 +1322,15 @@ export default function Game() {
         ctx.font = 'bold 44px "Noto Serif JP", "Yu Mincho", serif';
         ctx.lineJoin = 'round';
         ctx.lineWidth = 5;
-        ctx.strokeStyle = 'rgba(40,0,0,0.9)';
-        ctx.shadowColor = 'rgba(230,0,0,0.9)';
-        ctx.shadowBlur = 18;
-        const rg = ctx.createLinearGradient(0, by - 40, 0, by + 8);
-        rg.addColorStop(0, '#ff6a5a');
-        rg.addColorStop(1, '#bd0000');
+        // dark purple outline + purple glow for visibility over the image
+        ctx.strokeStyle = 'rgba(24,0,44,0.92)';
+        ctx.shadowColor = 'rgba(160,60,255,0.95)';
+        ctx.shadowBlur = 20;
+        // purple gradient fill (matches the background art)
+        const rg = ctx.createLinearGradient(0, by - 42, 0, by + 8);
+        rg.addColorStop(0,   '#f3d2ff');
+        rg.addColorStop(0.5, '#c060ff');
+        rg.addColorStop(1,   '#7a1fd0');
         ctx.strokeText(red, x, by);
         ctx.fillStyle = rg;
         ctx.fillText(red, x, by);
@@ -1394,9 +1397,11 @@ export default function Game() {
     ) => {
       const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
       if (primary) {
-        g.addColorStop(0, '#3a2a00'); g.addColorStop(0.5, '#c8a030'); g.addColorStop(1, '#3a2a00');
+        // gold, lightly translucent so the bg shows faintly
+        g.addColorStop(0, 'rgba(58,42,0,0.82)'); g.addColorStop(0.5, 'rgba(200,160,48,0.82)'); g.addColorStop(1, 'rgba(58,42,0,0.82)');
       } else {
-        g.addColorStop(0, '#0a0a24'); g.addColorStop(0.5, '#16163c'); g.addColorStop(1, '#0a0a24');
+        // dark, more translucent
+        g.addColorStop(0, 'rgba(10,10,36,0.5)'); g.addColorStop(0.5, 'rgba(22,22,60,0.5)'); g.addColorStop(1, 'rgba(10,10,36,0.5)');
       }
       ctx.fillStyle = g;
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.fill();
@@ -1413,11 +1418,14 @@ export default function Game() {
     };
 
     // Player name label (the editable input itself is an HTML overlay)
+    ctx.save();
     ctx.fillStyle = P.gold;
-    ctx.font = '11px "Noto Sans JP", sans-serif';
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
+    ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 4; // legible over the image
     ctx.fillText('プレイヤー名（ランキング表示用）', CX, NAME_LABEL_Y);
+    ctx.restore();
 
     menuBtn(MENU_START_BTN, '⚔  ゲームスタート  ⚔', true);
     menuBtn(MENU_RANK_BTN,  '🏆  ランキング', false);
@@ -1996,17 +2004,16 @@ export default function Game() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const loop = () => {
+      // TOP screen: keep the canvas transparent (everything but the text /
+      // UI is see-through) so the full-screen background image shows.
       ctx.clearRect(0, 0, W, H);
-      drawBG(ctx);
-      drawWalls(ctx);
-      drawCeiling(ctx);
       drawStart(ctx);
       if (gs.current.phase === 'start') {
         rafRef.current = requestAnimationFrame(loop);
       }
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawStart]);
+  }, [drawStart]);
 
   // ── Return to the TOP menu (from the game-over screen) ──────
   const goToTop = useCallback(() => {
@@ -2209,8 +2216,8 @@ export default function Game() {
               left: CX - 140,
               width: 280,
               height: NAME_INPUT_H,
-              // RPG-style: black background, white border, white text
-              background: '#000000',
+              // RPG-style: semi-transparent black bg (image faintly shows), white border/text
+              background: 'rgba(0,0,0,0.5)',
               border: '2px solid #ffffff',
               borderRadius: 6,
               color: '#ffffff',
