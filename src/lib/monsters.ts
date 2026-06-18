@@ -185,8 +185,9 @@ export const MONSTERS: MonsterDef[] = [
   },
 ];
 
-// Global block-size scale (shrink every monster to 90%)
-const BLOCK_SCALE = 0.9;
+// Global block-size scale (shrink every monster to 81% of the original —
+// 90% in a previous pass, then a further 10% reduction).
+const BLOCK_SCALE = 0.81;
 for (const m of MONSTERS) m.radius = m.radius * BLOCK_SCALE;
 
 export const MAX_LEVEL = MONSTERS.length - 1;

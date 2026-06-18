@@ -436,6 +436,9 @@ export default function Game() {
   const seShiranaihitoRef   = useRef<HTMLAudioElement | null>(null);
   const bgmOnRef            = useRef(true);
   const seOnRef             = useRef(true);
+  // Web Audio: pre-decoded SE buffers for instant, reliable, overlapping playback
+  const audioCtxRef         = useRef<AudioContext | null>(null);
+  const seBuffersRef        = useRef<Map<string, AudioBuffer>>(new Map());
 
   const [bgmOn, setBgmOn]   = useState(true);
   const [seOn,  setSeOn]    = useState(true);
@@ -489,13 +492,73 @@ export default function Game() {
     bgmGO.loop = false;
     bgmGO.volume = 0.5;
     bgmGameoverRef.current = bgmGO;
+    // HTMLAudio fallback (used only if Web Audio is unavailable)
     const se = new Audio('/se/gattai.wav');
     se.volume = 0.7;
     seGattaiRef.current = se;
     const seS = new Audio('/se/shiranaihito.wav');
     seS.volume = 0.8;
     seShiranaihitoRef.current = seS;
-    return () => { bgm.pause(); };
+
+    // Web Audio: create the context and pre-decode every SE into a buffer
+    // so playback is instant, overlappable and never fails mid-game.
+    const AC: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (AC) {
+      try {
+        const ctx = new AC();
+        audioCtxRef.current = ctx;
+        const decode = async (src: string) => {
+          try {
+            const res = await fetch(src);
+            const buf = await res.arrayBuffer();
+            const audioBuf = await ctx.decodeAudioData(buf);
+            seBuffersRef.current.set(src, audioBuf);
+          } catch { /* leave it to the HTMLAudio fallback */ }
+        };
+        decode('/se/gattai.wav');
+        decode('/se/shiranaihito.wav');
+      } catch { /* no Web Audio → HTMLAudio fallback */ }
+    }
+
+    return () => {
+      bgm.pause();
+      audioCtxRef.current?.close().catch(() => {});
+    };
+  }, []);
+
+  // Resume the Web Audio context — must run inside a user gesture (browser
+  // autoplay policy). Safe to call repeatedly.
+  const unlockAudio = useCallback(() => {
+    const ctx = audioCtxRef.current;
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }, []);
+
+  // Play a sound effect. Prefers the pre-decoded Web Audio buffer (instant,
+  // overlapping); falls back to a cloned HTMLAudio element.
+  const playSe = useCallback((src: string, volume: number, fallback: HTMLAudioElement | null) => {
+    if (!seOnRef.current) return;
+    const ctx = audioCtxRef.current;
+    const buf = seBuffersRef.current.get(src);
+    if (ctx && buf) {
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      try {
+        const node = ctx.createBufferSource();
+        node.buffer = buf;
+        const gain = ctx.createGain();
+        gain.gain.value = volume;
+        node.connect(gain).connect(ctx.destination);
+        node.start();
+        return;
+      } catch { /* fall through to HTMLAudio */ }
+    }
+    if (fallback) {
+      try {
+        const clone = fallback.cloneNode() as HTMLAudioElement;
+        clone.volume = volume;
+        clone.play().catch(() => {});
+      } catch { /* */ }
+    }
   }, []);
 
   useEffect(() => {
@@ -1360,16 +1423,10 @@ export default function Game() {
       gs.current.score += gain;
 
       // Merge SE
-      if (seOnRef.current) {
-        if (level === MAX_LEVEL) {
-          if (seShiranaihitoRef.current) {
-            const clone = seShiranaihitoRef.current.cloneNode() as HTMLAudioElement;
-            clone.play().catch(() => {});
-          }
-        } else if (seGattaiRef.current) {
-          const clone = seGattaiRef.current.cloneNode() as HTMLAudioElement;
-          clone.play().catch(() => {});
-        }
+      if (level === MAX_LEVEL) {
+        playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current);
+      } else {
+        playSe('/se/gattai.wav', 0.7, seGattaiRef.current);
       }
 
       // Floating popups (juicy feedback)
@@ -1398,7 +1455,7 @@ export default function Game() {
         try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
       }
     }, 80);
-  }, [spawnMonster, triggerSecretFx]);
+  }, [spawnMonster, triggerSecretFx, playSe]);
 
   // ── Drop current monster ────────────────────────────────────
   const drop = useCallback(() => {
@@ -1713,6 +1770,7 @@ export default function Game() {
 
   // ── Unified click handler (includes button hit-testing) ─────
   const handleClick = useCallback(async (clientX: number, clientY: number) => {
+    unlockAudio(); // resume Web Audio on every user gesture (autoplay policy)
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1756,7 +1814,7 @@ export default function Game() {
     } else {
       drop();
     }
-  }, [initGame, drop, saveScreenshot]);
+  }, [initGame, drop, saveScreenshot, unlockAudio]);
 
   return (
     <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
@@ -1802,7 +1860,7 @@ export default function Game() {
               {/* サウンドON/OFF（全フェーズ共通） */}
               <button
                 style={{ ...btnBase, right: 6 }}
-                onClick={() => { const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
+                onClick={() => { unlockAudio(); const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
               >
                 {soundOn ? '🔊' : '🔇'}
               </button>
@@ -1947,7 +2005,7 @@ export default function Game() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
                     <span style={{ fontSize: 14 }}>SE（効果音）</span>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button style={seOn ? onStyle : offStyle} onClick={() => setSeOn(true)}>ON</button>
+                      <button style={seOn ? onStyle : offStyle} onClick={() => { unlockAudio(); setSeOn(true); }}>ON</button>
                       <button style={!seOn ? onStyle : offStyle} onClick={() => setSeOn(false)}>OFF</button>
                     </div>
                   </div>
