@@ -23,3 +23,6 @@ html, body {
 body { overscroll-behavior: none; }
 
 canvas { max-width: 100%; }
+
+/* RPG-style player-name input placeholder (visible on black) */
+input::placeholder { color: rgba(255, 255, 255, 0.5); font-weight: 400; }

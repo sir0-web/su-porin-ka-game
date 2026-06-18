@@ -134,14 +134,15 @@ function evoName(lvl: number): string {
 
 // TOP menu button rects
 // プレイヤー名ラベル＋入力欄（スタートボタンの上）の領域
-const NAME_LABEL_Y   = 228;
-const NAME_INPUT_TOP = 240;
-const NAME_INPUT_H   = 34;
+const NAME_LABEL_Y   = 282;
+const NAME_INPUT_TOP = 292;
+const NAME_INPUT_H   = 36;
 
-const MENU_START_BTN = { w: 260, h: 52, x: CX - 130, y: 288 };
-const MENU_RANK_BTN  = { w: 230, h: 44, x: CX - 115, y: 354 };
-const MENU_SET_BTN   = { w: 230, h: 44, x: CX - 115, y: 410 };
-const MENU_HOW_BTN   = { w: 230, h: 44, x: CX - 115, y: 466 };
+// All TOP buttons share the same size as ゲームスタート
+const MENU_START_BTN = { w: 260, h: 52, x: CX - 130, y: 350 };
+const MENU_RANK_BTN  = { w: 260, h: 52, x: CX - 130, y: 416 };
+const MENU_SET_BTN   = { w: 260, h: 52, x: CX - 130, y: 482 };
+const MENU_HOW_BTN   = { w: 260, h: 52, x: CX - 130, y: 548 };
 // In-game / game-over button rects
 const GO_BTN = { w: 324, h: 46, x: CX - 162, y: 500 };         // retry (primary, full width)
 const GO_TOP_BTN = { w: 102, h: 40, x: CX - 162, y: 558 };     // back to TOP menu
@@ -1304,6 +1305,24 @@ export default function Game() {
     ctx.fillStyle = 'rgba(4,4,20,0.92)';
     ctx.fillRect(0, 0, W, H);
 
+    // ── Title frame (gold border, same gold as the buttons) ──
+    {
+      const fx = 14, fy = 24, fw = W - 28, fh = 226; // ≈ top 1/3 of the screen
+      ctx.save();
+      // subtle inner panel
+      ctx.fillStyle = 'rgba(6,6,26,0.55)';
+      rrect(ctx, fx, fy, fw, fh, 12); ctx.fill();
+      // gold border with a soft glow
+      ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 12;
+      ctx.strokeStyle = P.gold; ctx.lineWidth = 2.5;
+      rrect(ctx, fx, fy, fw, fh, 12); ctx.stroke();
+      ctx.shadowBlur = 0;
+      // thin inner gold line for an ornate frame
+      ctx.strokeStyle = 'rgba(200,160,48,0.5)'; ctx.lineWidth = 1;
+      rrect(ctx, fx + 5, fy + 5, fw - 10, fh - 10, 9); ctx.stroke();
+      ctx.restore();
+    }
+
     // Acrostic title (big red leading chars read downward = スイガゲーム)
     {
       const lines: [string, string][] = [
@@ -1312,20 +1331,20 @@ export default function Game() {
         ['ガ', 'ったいさせたら最後に知らない人がでてきて唖然とした'],
         ['ゲーム', ''],
       ];
-      const x0 = 22, lh = 44, baseY = 60;
+      const x0 = 30, lh = 52, baseY = 74;
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       lines.forEach(([red, white], i) => {
         const by = baseY + i * lh;
         let x = x0;
-        ctx.font = 'bold 38px "Noto Serif JP", "Yu Mincho", serif';
+        ctx.font = 'bold 44px "Noto Serif JP", "Yu Mincho", serif';
         ctx.lineJoin = 'round';
-        ctx.lineWidth = 4.5;
+        ctx.lineWidth = 5;
         ctx.strokeStyle = 'rgba(40,0,0,0.9)';
         ctx.shadowColor = 'rgba(230,0,0,0.9)';
-        ctx.shadowBlur = 16;
-        const rg = ctx.createLinearGradient(0, by - 34, 0, by + 6);
+        ctx.shadowBlur = 18;
+        const rg = ctx.createLinearGradient(0, by - 40, 0, by + 8);
         rg.addColorStop(0, '#ff6a5a');
         rg.addColorStop(1, '#bd0000');
         ctx.strokeText(red, x, by);
@@ -1338,22 +1357,12 @@ export default function Game() {
           ctx.lineWidth = 2.5;
           ctx.strokeStyle = 'rgba(0,0,0,0.55)';
           ctx.fillStyle = '#f4f4ff';
-          ctx.strokeText(white, x, by - 6);
-          ctx.fillText(white, x, by - 6);
+          ctx.strokeText(white, x, by - 9);
+          ctx.fillText(white, x, by - 9);
         }
       });
       ctx.restore();
     }
-
-    // Separator line under title
-    ctx.save();
-    ctx.strokeStyle = P.gold;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.35;
-    ctx.beginPath();
-    ctx.moveTo(22, 212); ctx.lineTo(W - 22, 212);
-    ctx.stroke();
-    ctx.restore();
 
     // Menu button helper
     const menuBtn = (
@@ -1374,7 +1383,7 @@ export default function Game() {
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.stroke();
       if (primary) { ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 14; }
       ctx.fillStyle = primary ? '#fffadc' : P.text;
-      ctx.font = `bold ${primary ? 17 : 14}px "Noto Sans JP", sans-serif`;
+      ctx.font = `bold ${primary ? 18 : 16}px "Noto Sans JP", sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
@@ -2175,17 +2184,21 @@ export default function Game() {
             style={{
               position: 'absolute',
               top: NAME_INPUT_TOP,
-              left: CX - 115,
-              width: 230,
+              left: CX - 130,
+              width: 260,
               height: NAME_INPUT_H,
-              background: 'rgba(6,6,28,0.88)',
-              border: '1.5px solid #c8a030',
-              borderRadius: 8,
-              color: '#f0e0b0',
-              fontSize: 14,
+              // RPG-style: black background, white border, white text
+              background: '#000000',
+              border: '2px solid #ffffff',
+              borderRadius: 6,
+              color: '#ffffff',
+              fontSize: 15,
+              fontWeight: 700,
+              letterSpacing: 1,
               textAlign: 'center',
               outline: 'none',
               fontFamily: '"Noto Sans JP", sans-serif',
+              boxShadow: '0 0 0 1px #000, 0 0 8px rgba(255,255,255,0.25)',
               boxSizing: 'border-box',
               zIndex: 5,
             }}
