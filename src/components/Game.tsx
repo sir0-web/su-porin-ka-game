@@ -757,23 +757,33 @@ export default function Game() {
     rg.addColorStop(0, '#10103a'); rg.addColorStop(1, '#060618');
     ctx.fillStyle = rg; ctx.fillRect(GR, 0, WALL, H);
 
+    // Bottom band (floor)
     const fg = ctx.createLinearGradient(0, FLOOR_Y, 0, H);
     fg.addColorStop(0, '#10103a'); fg.addColorStop(1, '#060618');
     ctx.fillStyle = fg; ctx.fillRect(0, FLOOR_Y, W, WALL);
 
-    ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(GL, 0);       ctx.lineTo(GL, FLOOR_Y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(GR, 0);       ctx.lineTo(GR, FLOOR_Y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(GL, FLOOR_Y); ctx.lineTo(GR, FLOOR_Y); ctx.stroke();
+    // Top band (mirrors the floor) so the play field is fully enclosed
+    const tg = ctx.createLinearGradient(0, CEILING_Y - WALL, 0, CEILING_Y);
+    tg.addColorStop(0, '#060618'); tg.addColorStop(1, '#10103a');
+    ctx.fillStyle = tg; ctx.fillRect(0, CEILING_Y - WALL, W, WALL);
 
-    // Gold corner accents
+    // Inner frame edges around the play field (top..floor)
+    ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(GL, CEILING_Y); ctx.lineTo(GL, FLOOR_Y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GR, CEILING_Y); ctx.lineTo(GR, FLOOR_Y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GL, FLOOR_Y);   ctx.lineTo(GR, FLOOR_Y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GL, CEILING_Y); ctx.lineTo(GR, CEILING_Y); ctx.stroke();
+
+    // Gold corner accents (all four corners of the play field)
     ctx.strokeStyle = P.gold; ctx.lineWidth = 2;
     const cs = 18;
-    ctx.beginPath(); ctx.moveTo(GL+cs,FLOOR_Y); ctx.lineTo(GL,FLOOR_Y); ctx.lineTo(GL,FLOOR_Y-cs); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(GR-cs,FLOOR_Y); ctx.lineTo(GR,FLOOR_Y); ctx.lineTo(GR,FLOOR_Y-cs); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GL+cs,FLOOR_Y);   ctx.lineTo(GL,FLOOR_Y);   ctx.lineTo(GL,FLOOR_Y-cs);   ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GR-cs,FLOOR_Y);   ctx.lineTo(GR,FLOOR_Y);   ctx.lineTo(GR,FLOOR_Y-cs);   ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GL+cs,CEILING_Y); ctx.lineTo(GL,CEILING_Y); ctx.lineTo(GL,CEILING_Y+cs); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GR-cs,CEILING_Y); ctx.lineTo(GR,CEILING_Y); ctx.lineTo(GR,CEILING_Y+cs); ctx.stroke();
 
-    diamond(ctx, GL, H / 2, 5);
-    diamond(ctx, GR, H / 2, 5);
+    diamond(ctx, GL, (CEILING_Y + FLOOR_Y) / 2, 5);
+    diamond(ctx, GR, (CEILING_Y + FLOOR_Y) / 2, 5);
   }, [diamond]);
 
   // ── Ceiling / Danger zone ───────────────────────────────────
@@ -799,7 +809,7 @@ export default function Game() {
 
   // ── HUD ─────────────────────────────────────────────────────
   const drawHUD = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
-    const py = 6, ph = CEILING_Y - 12;
+    const py = 6, ph = CEILING_Y - WALL - py - 4; // sit above the top frame band
 
     // ── Top-left: NEXT panel (moved here from the right) ──
     const nw = 84, nx = GL + 4;

@@ -15,7 +15,8 @@ export default function Page() {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        padding: '4px 0 0',
+        justifyContent: 'center', // centre the board vertically (equal bg margin top/bottom)
+        padding: 0,
       }}
     >
       <Game />
