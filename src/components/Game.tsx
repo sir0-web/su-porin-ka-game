@@ -428,6 +428,7 @@ export default function Game() {
   const scaleRef      = useRef<number>(1);
   const coolRef       = useRef<number>(0);
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
+  const bgImgRef      = useRef<HTMLImageElement | null>(null);
   const procRef       = useRef<Map<number, Sprite>>(new Map());
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
   const rankingRef    = useRef<RankEntry[]>([]);
@@ -490,6 +491,14 @@ export default function Game() {
       rankingRef.current = list;
       setRankingTick((t) => t + 1);
     });
+  }, []);
+
+  // Load the play-area background image (optional). If the file is missing
+  // we silently keep the dark fallback background.
+  useEffect(() => {
+    const img = new Image();
+    img.src = '/background.png';
+    bgImgRef.current = img; // drawBG checks .complete / .naturalWidth before use
   }, []);
 
   // Load audio assets
@@ -709,9 +718,23 @@ export default function Game() {
 
   // ── Background ──────────────────────────────────────────────
   const drawBG = useCallback((ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = P.bg;
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = P.gameBg;
+    const bg = bgImgRef.current;
+    const hasBg = !!bg && bg.complete && bg.naturalWidth > 0;
+    if (hasBg) {
+      // cover-fit the image across the whole canvas (fills the area
+      // outside the play frame too)
+      const ir = bg!.naturalWidth / bg!.naturalHeight, cr = W / H;
+      let dw: number, dh: number;
+      if (ir > cr) { dh = H; dw = H * ir; } else { dw = W; dh = W / ir; }
+      ctx.drawImage(bg!, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    } else {
+      ctx.fillStyle = P.bg;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Play field: keep it dark so blocks stay readable. Over a background
+    // image use a translucent veil; otherwise the solid play-bg colour.
+    ctx.fillStyle = hasBg ? 'rgba(7,7,30,0.66)' : P.gameBg;
     ctx.fillRect(GL, 0, GW, FLOOR_Y);
 
     ctx.strokeStyle = 'rgba(30,30,90,0.18)';
