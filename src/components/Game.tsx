@@ -64,7 +64,7 @@ interface RankEntry { name: string; score: number; maxLevel: number; }
 // Floating score / combo popup
 interface Popup { x: number; y: number; text: string; start: number; big: boolean; }
 // Merge burst: light orbs flying outward + an expanding flash ring
-interface Particle { x: number; y: number; vx: number; vy: number; r: number; start: number; life: number; color: string; }
+interface Particle { x: number; y: number; vx: number; vy: number; r: number; start: number; life: number; color: string; star?: boolean; }
 interface Ring { x: number; y: number; start: number; life: number; maxR: number; color: string; }
 const COMBO_WINDOW = 850; // ms within which merges count as a combo
 const COMBO_CAP = 9;      // max combo multiplier / display
@@ -833,51 +833,92 @@ export default function Game() {
     }
   }, [drawMonster]);
 
-  // ── Merge burst: spawn light orbs + an expanding flash ring ──
+  // 4-pointed sparkle star path
+  const star4 = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, R: number) => {
+    const ri = R * 0.34;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const ang = (Math.PI / 4) * i - Math.PI / 2;
+      const rad = i % 2 === 0 ? R : ri;
+      const px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }, []);
+
+  // ── Merge burst: a bright flash + light orbs + sparkle stars + rings ──
   const spawnBurst = useCallback((x: number, y: number, color: string, big: boolean) => {
     const now = Date.now();
-    const n = big ? 26 : 15;
+
+    // 1. central flash pop (large, bright, stationary, very short-lived)
+    particlesRef.current.push({
+      x, y, vx: 0, vy: 0,
+      r: big ? 56 : 40, start: now, life: big ? 280 : 220, color,
+    });
+
+    // 2. flying light orbs (more, bigger, faster than before)
+    const n = big ? 40 : 26;
     for (let i = 0; i < n; i++) {
       const ang = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-      const spd = (big ? 2.6 : 1.7) + Math.random() * (big ? 3.6 : 2.4);
+      const spd = (big ? 3.6 : 2.6) + Math.random() * (big ? 5.4 : 3.8);
       particlesRef.current.push({
         x, y,
         vx: Math.cos(ang) * spd,
         vy: Math.sin(ang) * spd,
-        r: (big ? 5 : 3.2) + Math.random() * (big ? 6 : 4),
+        r: (big ? 6.5 : 4.5) + Math.random() * (big ? 8 : 5.5),
         start: now,
-        life: big ? 720 : 540,
+        life: big ? 880 : 700,
         color,
       });
     }
-    ringsRef.current.push({ x, y, start: now, life: big ? 440 : 320, maxR: big ? 96 : 60, color });
+
+    // 3. bright twinkling sparkle stars shooting out (high visibility)
+    const ns = big ? 12 : 7;
+    for (let i = 0; i < ns; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = (big ? 4.5 : 3.4) + Math.random() * (big ? 5 : 3.5);
+      particlesRef.current.push({
+        x, y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        r: (big ? 9 : 7) + Math.random() * 5,
+        start: now,
+        life: big ? 760 : 620,
+        color: '#fff6da',
+        star: true,
+      });
+    }
+
+    // 4. double expanding flash ring (colour + bright white inner)
+    ringsRef.current.push({ x, y, start: now, life: big ? 520 : 380, maxR: big ? 140 : 92, color });
+    ringsRef.current.push({ x, y, start: now, life: big ? 360 : 260, maxR: big ? 90 : 58, color: '#ffffff' });
   }, []);
 
   // ── Draw + advance merge bursts (orbs & rings) ──────────────
   const drawParticles = useCallback((ctx: CanvasRenderingContext2D, step: boolean) => {
     const now = Date.now();
 
-    // expanding flash rings
+    // expanding flash rings (bright, glowing)
     const rings = ringsRef.current;
     for (let i = rings.length - 1; i >= 0; i--) {
       const rg = rings[i];
       const t = (now - rg.start) / rg.life;
       if (t >= 1) { rings.splice(i, 1); continue; }
-      const r = rg.maxR * (0.2 + 0.8 * t);
+      const r = rg.maxR * (0.15 + 0.85 * t);
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = (1 - t) * 0.6;
+      ctx.globalAlpha = (1 - t) * 0.9;
       ctx.strokeStyle = rg.color;
-      ctx.lineWidth = 3 * (1 - t) + 0.5;
+      ctx.lineWidth = 5 * (1 - t) + 1;
       ctx.shadowColor = rg.color;
-      ctx.shadowBlur = 12;
+      ctx.shadowBlur = 20;
       ctx.beginPath();
       ctx.arc(rg.x, rg.y, r, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
 
-    // light orbs
+    // light orbs + sparkle stars
     const ps = particlesRef.current;
     for (let i = ps.length - 1; i >= 0; i--) {
       const p = ps[i];
@@ -888,20 +929,34 @@ export default function Game() {
         p.vy += 0.06; p.vx *= 0.95; p.vy *= 0.95;
       }
       const a = 1 - t;
-      const rr = p.r * (1 - 0.5 * t);
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rr);
-      g.addColorStop(0,   hexA('#ffffff', a));
-      g.addColorStop(0.4, hexA(p.color, a * 0.9));
-      g.addColorStop(1,   hexA(p.color, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
-      ctx.fill();
+      if (p.star) {
+        // twinkling 4-point star
+        const tw = 0.55 + 0.45 * Math.sin(now * 0.03 + p.x);
+        const R = p.r * (1 - 0.45 * t) * tw;
+        ctx.globalAlpha = a;
+        ctx.shadowColor = hexA(p.color, 0.95);
+        ctx.shadowBlur = R * 2.2;
+        ctx.fillStyle = '#fffdf0';
+        star4(ctx, p.x, p.y, R);
+        ctx.fill();
+      } else {
+        const rr = p.r * (1 - 0.5 * t);
+        ctx.shadowColor = hexA(p.color, a);
+        ctx.shadowBlur = rr * 1.6;
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rr);
+        g.addColorStop(0,   hexA('#ffffff', a));
+        g.addColorStop(0.4, hexA(p.color, a * 0.95));
+        g.addColorStop(1,   hexA(p.color, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
-  }, []);
+  }, [star4]);
 
   // ── Secret monster (？) — black blurred orb with white question mark
   const drawMystery = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, r: number) => {
@@ -945,19 +1000,6 @@ export default function Game() {
       });
     }
     secretFxRef.current = { start: Date.now(), sparkles };
-  }, []);
-
-  // 4-pointed sparkle star path
-  const star4 = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, R: number) => {
-    const ri = R * 0.34;
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const ang = (Math.PI / 4) * i - Math.PI / 2;
-      const rad = i % 2 === 0 ? R : ri;
-      const px = x + Math.cos(ang) * rad, py = y + Math.sin(ang) * rad;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
   }, []);
 
   // ── Floating score / combo popups ──────────────────────────
