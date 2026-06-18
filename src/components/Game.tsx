@@ -96,6 +96,18 @@ function insertRanking(entry: RankEntry): { list: RankEntry[]; index: number } {
 
 const PLAYER_NAME_KEY = 'sporinkaPlayerName';
 
+// Random alphanumeric id (upper/lower case + digits)
+function randId(len: number): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let s = '';
+  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+// Default player name, e.g. 「知らない人a9Kp」
+function defaultPlayerName(): string {
+  return '知らない人' + randId(4);
+}
+
 // Fetch the shared online ranking; falls back to the local one on failure.
 async function fetchGlobalRanking(): Promise<RankEntry[]> {
   try {
@@ -134,15 +146,19 @@ function evoName(lvl: number): string {
 
 // TOP menu button rects
 // プレイヤー名ラベル＋入力欄（スタートボタンの上）の領域
-const NAME_LABEL_Y   = 288;
-const NAME_INPUT_TOP = 298;
-const NAME_INPUT_H   = 38;
+const NAME_LABEL_Y   = 338;
+const NAME_INPUT_TOP = 348;
+const NAME_INPUT_H   = 40;
+
+// Decorative rules
+const TITLE_DIV_Y    = 296;  // rich rule in the gap between title and the rest
+const NAME_DIV_Y     = 406;  // rule below the player-name input
 
 // All TOP buttons share the same (slightly larger) size
-const MENU_START_BTN = { w: 280, h: 58, x: CX - 140, y: 350 };
-const MENU_RANK_BTN  = { w: 280, h: 58, x: CX - 140, y: 422 };
-const MENU_SET_BTN   = { w: 280, h: 58, x: CX - 140, y: 494 };
-const MENU_HOW_BTN   = { w: 280, h: 58, x: CX - 140, y: 566 };
+const MENU_START_BTN = { w: 288, h: 60, x: CX - 144, y: 420 };
+const MENU_RANK_BTN  = { w: 288, h: 60, x: CX - 144, y: 492 };
+const MENU_SET_BTN   = { w: 288, h: 60, x: CX - 144, y: 564 };
+const MENU_HOW_BTN   = { w: 288, h: 60, x: CX - 144, y: 636 };
 // In-game / game-over button rects
 const GO_BTN = { w: 324, h: 46, x: CX - 162, y: 500 };         // retry (primary, full width)
 const GO_TOP_BTN = { w: 102, h: 40, x: CX - 162, y: 558 };     // back to TOP menu
@@ -475,13 +491,17 @@ export default function Game() {
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');
 
-  // Load the saved player name once on mount
+  // Load the saved player name once on mount; if none, generate a default
+  // 「知らない人XXXX」 (random alphanumeric) and persist it.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(PLAYER_NAME_KEY) ?? '';
-      playerNameRef.current = saved;
-      setPlayerNameInput(saved);
-    } catch { /* */ }
+    let name = '';
+    try { name = localStorage.getItem(PLAYER_NAME_KEY) ?? ''; } catch { /* */ }
+    if (!name) {
+      name = defaultPlayerName();
+      try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch { /* */ }
+    }
+    playerNameRef.current = name;
+    setPlayerNameInput(name);
   }, []);
 
   // Load the shared ranking once on mount (falls back to local on failure)
@@ -1324,6 +1344,47 @@ export default function Game() {
       });
       ctx.restore();
     }
+
+    // ── Decorative gold rule (rich = ornate, used in the title gap) ──
+    const drawRule = (cy: number, rich: boolean) => {
+      const x1 = 36, x2 = W - 36, mid = CX;
+      const gap = rich ? 16 : 11;
+      ctx.save();
+      const g = ctx.createLinearGradient(x1, 0, x2, 0);
+      g.addColorStop(0,   'rgba(200,160,48,0)');
+      g.addColorStop(0.5, P.gold);
+      g.addColorStop(1,   'rgba(200,160,48,0)');
+      ctx.strokeStyle = g;
+      ctx.lineWidth = rich ? 1.6 : 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x1, cy); ctx.lineTo(mid - gap, cy);
+      ctx.moveTo(mid + gap, cy); ctx.lineTo(x2, cy);
+      ctx.stroke();
+      // centre diamond ornament
+      const ds = rich ? 7 : 5;
+      ctx.shadowColor = P.goldBrt; ctx.shadowBlur = rich ? 10 : 5;
+      ctx.fillStyle = rich ? P.goldBrt : P.gold;
+      ctx.beginPath();
+      ctx.moveTo(mid, cy - ds); ctx.lineTo(mid + ds, cy);
+      ctx.lineTo(mid, cy + ds); ctx.lineTo(mid - ds, cy);
+      ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+      if (rich) {
+        // ornate outline + flanking dots
+        ctx.strokeStyle = 'rgba(255,224,80,0.7)'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(mid, cy - ds - 4); ctx.lineTo(mid + ds + 4, cy);
+        ctx.lineTo(mid, cy + ds + 4); ctx.lineTo(mid - ds - 4, cy);
+        ctx.closePath(); ctx.stroke();
+        ctx.fillStyle = P.gold;
+        [mid - gap - 16, mid + gap + 16].forEach((dx) => {
+          ctx.beginPath(); ctx.arc(dx, cy, 1.8, 0, Math.PI * 2); ctx.fill();
+        });
+      }
+      ctx.restore();
+    };
+    drawRule(TITLE_DIV_Y, true);  // rich rule between title and the menu
+    drawRule(NAME_DIV_Y, false);  // rule below the player-name input
 
     // Menu button helper
     const menuBtn = (
