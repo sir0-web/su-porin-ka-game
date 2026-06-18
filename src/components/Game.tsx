@@ -763,8 +763,8 @@ export default function Game() {
 
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-    ctx.fillText('N E X T', nx + nw / 2, py + 8);
+    ctx.font = 'bold 12px "Noto Sans JP", sans-serif';
+    ctx.fillText('NEXT', nx + nw / 2, py + 7);
 
     const nm  = MONSTERS[st.nextLevel];
     const nmr = Math.min(nm.radius, 28);
@@ -826,29 +826,29 @@ export default function Game() {
     ctx.beginPath(); ctx.moveTo(x2, bY + 8); ctx.lineTo(x2, bY + bH - 8); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x3, bY + 8); ctx.lineTo(x3, bY + bH - 8); ctx.stroke();
 
-    const labelY = bY + 9;
-    const valY = bY + bH / 2 + 6;
+    const labelY = bY + 8;
+    const valY = bY + bH / 2 + 9;
     ctx.textAlign = 'center';
 
-    // BEST
+    // BEST SCORE
     ctx.textBaseline = 'top';
     ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-    ctx.fillText('B E S T', x1 + w1 / 2, labelY);
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+    ctx.fillText('BEST SCORE', x1 + w1 / 2, labelY);
     ctx.textBaseline = 'middle';
     ctx.fillStyle = P.textDim;
-    ctx.font = 'bold 18px "Oswald", "Arial Narrow", sans-serif';
+    ctx.font = 'bold 22px "Oswald", "Arial Narrow", sans-serif';
     ctx.fillText(String(st.highScore), x1 + w1 / 2, valY);
 
     // SCORE (primary)
     ctx.textBaseline = 'top';
     ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-    ctx.fillText('S C O R E', x2 + w2 / 2, labelY);
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+    ctx.fillText('SCORE', x2 + w2 / 2, labelY);
     ctx.textBaseline = 'middle';
     ctx.fillStyle = P.text;
     const scoreStr = String(st.score);
-    ctx.font = `bold ${scoreStr.length > 6 ? 22 : 28}px "Oswald", "Arial Narrow", sans-serif`;
+    ctx.font = `bold ${scoreStr.length > 6 ? 28 : 34}px "Oswald", "Arial Narrow", sans-serif`;
     ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 8;
     ctx.fillText(scoreStr, x2 + w2 / 2, valY);
     ctx.shadowBlur = 0;
@@ -856,15 +856,15 @@ export default function Game() {
     // 最大進化
     ctx.textBaseline = 'top';
     ctx.fillStyle = P.gold;
-    ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.fillText('最大進化', x3 + w3 / 2, labelY);
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffe9a8';
     const ev = evoName(st.maxLevel);
     const evShort = ev.length > 7 ? ev.slice(0, 7) : ev;
-    let efs = 14;
+    let efs = 17;
     ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
-    while (ctx.measureText(evShort).width > w3 - 10 && efs > 9) {
+    while (ctx.measureText(evShort).width > w3 - 8 && efs > 10) {
       efs -= 1; ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
     }
     ctx.fillText(evShort, x3 + w3 / 2, valY);
