@@ -455,6 +455,7 @@ export default function Game() {
   const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto'>(null);
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
+  const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
   const [, setRankingTick]  = useState(0);
   const [playerNameInput, setPlayerNameInput] = useState('');
 
@@ -682,6 +683,30 @@ export default function Game() {
     ctx.restore();
   }, []);
 
+  // ── Block name text, tinted to the block's colour with a glowing
+  //    aura + dark outline so it stays legible on dark panels ──────
+  const drawNameText = useCallback((
+    ctx: CanvasRenderingContext2D,
+    text: string, cx: number, cy: number, level: number, fs: number,
+  ) => {
+    // bright tint (highlightColor) + matching glow; secret block = mystic purple
+    let fill: string, glow: string;
+    if (level >= MAX_LEVEL) { fill = '#e8c8ff'; glow = '#b060ff'; }
+    else { const m = MONSTERS[level]; fill = m.highlightColor; glow = m.glowColor; }
+    ctx.save();
+    ctx.font = `bold ${fs}px "Noto Sans JP", sans-serif`;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(2, fs * 0.26);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.strokeText(text, cx, cy);
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = fs * 0.85;
+    ctx.fillStyle = fill;
+    ctx.fillText(text, cx, cy); // double pass intensifies the aura
+    ctx.fillText(text, cx, cy);
+    ctx.restore();
+  }, []);
+
   // ── Background ──────────────────────────────────────────────
   const drawBG = useCallback((ctx: CanvasRenderingContext2D) => {
     ctx.fillStyle = P.bg;
@@ -787,10 +812,9 @@ export default function Game() {
     rrect(ctx, pillX, pillY, pillW, pillH, 7); ctx.fill();
     ctx.strokeStyle = 'rgba(200,160,48,0.6)'; ctx.lineWidth = 1;
     rrect(ctx, pillX, pillY, pillW, pillH, 7); ctx.stroke();
-    ctx.fillStyle = '#ffe9a8';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(nameShort, nx + nw / 2, pillY + pillH / 2 + 0.5);
+    drawNameText(ctx, nameShort, nx + nw / 2, pillY + pillH / 2 + 0.5, st.nextLevel, 9);
 
     // ── Current monster at drop position ──
     if (st.phase === 'playing') {
@@ -859,7 +883,6 @@ export default function Game() {
     ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.fillText('最大進化', x3 + w3 / 2, labelY);
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffe9a8';
     const ev = evoName(st.maxLevel);
     const evShort = ev.length > 7 ? ev.slice(0, 7) : ev;
     let efs = 17;
@@ -867,8 +890,8 @@ export default function Game() {
     while (ctx.measureText(evShort).width > w3 - 8 && efs > 10) {
       efs -= 1; ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
     }
-    ctx.fillText(evShort, x3 + w3 / 2, valY);
-  }, [drawMonster]);
+    drawNameText(ctx, evShort, x3 + w3 / 2, valY, st.maxLevel, efs);
+  }, [drawMonster, drawNameText]);
 
   // 4-pointed sparkle star path
   const star4 = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, R: number) => {
@@ -1654,6 +1677,17 @@ export default function Game() {
     }
   }, []);
 
+  // ── Open the evolution-route popup (same content as the TOP "遊び方")
+  //    Auto-pause while it's open during play so the game can't end. ──
+  const openEvolution = useCallback(() => {
+    if (gs.current.phase === 'playing' && !isPausedRef.current) {
+      togglePause();
+      pausedForModalRef.current = true;
+    }
+    modalRef.current = 'howto';
+    setModal('howto');
+  }, [togglePause]);
+
   // ── Initialize / restart game ───────────────────────────────
   const initGame = useCallback(async () => {
     cancelAnimationFrame(rafRef.current);
@@ -2089,6 +2123,16 @@ export default function Game() {
                   {isPaused ? '▶' : '⏸'}
                 </button>
               )}
+              {/* 進化順を確認（停止ボタンの左・ゲーム中のみ） */}
+              {uiPhase === 'playing' && (
+                <button
+                  style={{ ...btnBase, right: 90 }}
+                  onClick={openEvolution}
+                  title="進化順を見る"
+                >
+                  🥚
+                </button>
+              )}
             </>
           );
         })()}
@@ -2125,7 +2169,11 @@ export default function Game() {
           />
         )}
         {modal !== null && (() => {
-          const closeModal = () => { modalRef.current = null; setModal(null); };
+          const closeModal = () => {
+            modalRef.current = null; setModal(null);
+            // resume play if we auto-paused to show the in-game popup
+            if (pausedForModalRef.current) { pausedForModalRef.current = false; togglePause(); }
+          };
           const panelStyle: React.CSSProperties = {
             background: 'rgba(8,8,28,0.98)',
             border: '1.5px solid #c8a030',
