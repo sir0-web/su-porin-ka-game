@@ -11,14 +11,11 @@ import {
 // ─── Canvas dimensions ─────────────────────────────────────────
 const W = 400;
 const WALL = 14;
-const H = 732;
-const FLOOR_Y = H - WALL;       // play-field floor near the bottom (718)
-// Top score bar (BEST SCORE | SCORE | 最大進化), placed BELOW the overlay
-// buttons (sound / pause / egg) so they never overlap.
-const TBAR_Y = 46;
-const TBAR_H = 60;              // 46 → 106
-const CEILING_Y = 204;          // danger line (play field starts here)
-const DROP_Y = 158;             // drop-preview hover position
+const FLOOR_Y = 646;            // play-field floor (blocks rest here)
+const BHUD_Y = FLOOR_Y + WALL;  // top of the bottom HUD bar (660)
+const H = 732;                  // canvas height incl. the bottom HUD bar
+const CEILING_Y = 118;
+const DROP_Y = 68;
 const GL = WALL;
 const GR = W - WALL;
 const GW = GR - GL;
@@ -779,11 +776,9 @@ export default function Game() {
 
   // ── HUD ─────────────────────────────────────────────────────
   const drawHUD = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
-    // NEXT panel sits below the top score bar, above the danger line
-    const py = TBAR_Y + TBAR_H + 6;   // 112
-    const ph = CEILING_Y - py - 8;    // panel height up to the danger line
+    const py = 6, ph = CEILING_Y - 12;
 
-    // ── NEXT panel (top-left, below the score bar) ──
+    // ── Top-left: NEXT panel (moved here from the right) ──
     const nw = 84, nx = GL + 4;
     ctx.fillStyle = P.panel;
     rrect(ctx, nx, py, nw, ph, 5); ctx.fill();
@@ -838,9 +833,9 @@ export default function Game() {
       }
     }
 
-    // ── Top score bar: BEST SCORE | SCORE | 最大進化 ──
+    // ── Bottom HUD bar: BEST | SCORE | 最大進化 ──
     const bX = GL + 4, bW = GW - 8;
-    const bY = TBAR_Y, bH = TBAR_H;
+    const bY = BHUD_Y + 4, bH = H - bY - 4;
     ctx.fillStyle = P.panel;
     rrect(ctx, bX, bY, bW, bH, 6); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
