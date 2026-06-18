@@ -2,17 +2,17 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'スぽりんカ',
+  title: 'スイガゲーム',
   description: 'ROモンスターを合体させてスコアを競うパズルゲーム！',
   openGraph: {
-    title: 'スぽりんカ',
+    title: 'スイガゲーム',
     description: 'ROモンスターを合体させてスコアを競うパズルゲーム！',
     locale: 'ja_JP',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'スぽりんカ',
+    title: 'スイガゲーム',
     description: 'ROモンスターを合体させてスコアを競うパズルゲーム！',
   },
 };
