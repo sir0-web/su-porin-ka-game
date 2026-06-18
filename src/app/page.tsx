@@ -5,7 +5,13 @@ export default function Page() {
     <main
       style={{
         minHeight: '100dvh',
-        background: 'linear-gradient(180deg, #06060f 0%, #0c0825 100%)',
+        // Full-screen background image (covers the area outside the play
+        // area too). Falls back to a dark colour if the image is missing.
+        backgroundColor: '#06060f',
+        backgroundImage: 'url(/background.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
