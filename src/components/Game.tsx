@@ -42,6 +42,8 @@ interface BodyData {
   monsterId: number;
   createdAt: number;
   isMerging: boolean;
+  squashT?: number;   // start time of the landing squash (ms), 0/undefined = none
+  squashAmp?: number; // squash amplitude (0..~0.24), scaled by impact speed
 }
 type Phase = 'start' | 'playing' | 'gameover';
 interface GS {
@@ -61,6 +63,9 @@ interface RankEntry { name: string; score: number; maxLevel: number; }
 
 // Floating score / combo popup
 interface Popup { x: number; y: number; text: string; start: number; big: boolean; }
+// Merge burst: light orbs flying outward + an expanding flash ring
+interface Particle { x: number; y: number; vx: number; vy: number; r: number; start: number; life: number; color: string; }
+interface Ring { x: number; y: number; start: number; life: number; maxR: number; color: string; }
 const COMBO_WINDOW = 850; // ms within which merges count as a combo
 const COMBO_CAP = 9;      // max combo multiplier / display
 
@@ -427,6 +432,8 @@ export default function Game() {
   const lastRankIdxRef = useRef<number>(-1);
   const playerNameRef = useRef<string>('');
   const popupsRef     = useRef<Popup[]>([]);
+  const particlesRef  = useRef<Particle[]>([]);
+  const ringsRef      = useRef<Ring[]>([]);
   const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
   const viewingRef    = useRef<boolean>(false); // gazing at the final board
@@ -597,6 +604,7 @@ export default function Game() {
     level: number,
     alpha = 1,
     angle = 0,
+    squash = 0, // world-vertical squash & stretch (+ = flattened/wider)
   ) => {
     const m    = MONSTERS[level];
     const r    = m.radius;
@@ -626,6 +634,8 @@ export default function Game() {
       const bcx = proc.cxh * s;
       const bcy = proc.cyh * s;
       ctx.translate(x, y);
+      // squash along world axes (wider + shorter on impact), then rotate
+      if (squash) ctx.scale(1 + squash, 1 - squash);
       ctx.rotate(angle);
       ctx.drawImage(proc.canvas, -bcx, -bcy, dw, dh);
 
@@ -822,6 +832,76 @@ export default function Game() {
       }
     }
   }, [drawMonster]);
+
+  // ── Merge burst: spawn light orbs + an expanding flash ring ──
+  const spawnBurst = useCallback((x: number, y: number, color: string, big: boolean) => {
+    const now = Date.now();
+    const n = big ? 26 : 15;
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+      const spd = (big ? 2.6 : 1.7) + Math.random() * (big ? 3.6 : 2.4);
+      particlesRef.current.push({
+        x, y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        r: (big ? 5 : 3.2) + Math.random() * (big ? 6 : 4),
+        start: now,
+        life: big ? 720 : 540,
+        color,
+      });
+    }
+    ringsRef.current.push({ x, y, start: now, life: big ? 440 : 320, maxR: big ? 96 : 60, color });
+  }, []);
+
+  // ── Draw + advance merge bursts (orbs & rings) ──────────────
+  const drawParticles = useCallback((ctx: CanvasRenderingContext2D, step: boolean) => {
+    const now = Date.now();
+
+    // expanding flash rings
+    const rings = ringsRef.current;
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const rg = rings[i];
+      const t = (now - rg.start) / rg.life;
+      if (t >= 1) { rings.splice(i, 1); continue; }
+      const r = rg.maxR * (0.2 + 0.8 * t);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = (1 - t) * 0.6;
+      ctx.strokeStyle = rg.color;
+      ctx.lineWidth = 3 * (1 - t) + 0.5;
+      ctx.shadowColor = rg.color;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(rg.x, rg.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // light orbs
+    const ps = particlesRef.current;
+    for (let i = ps.length - 1; i >= 0; i--) {
+      const p = ps[i];
+      const t = (now - p.start) / p.life;
+      if (t >= 1) { ps.splice(i, 1); continue; }
+      if (step) {
+        p.x += p.vx; p.y += p.vy;
+        p.vy += 0.06; p.vx *= 0.95; p.vy *= 0.95;
+      }
+      const a = 1 - t;
+      const rr = p.r * (1 - 0.5 * t);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rr);
+      g.addColorStop(0,   hexA('#ffffff', a));
+      g.addColorStop(0.4, hexA(p.color, a * 0.9));
+      g.addColorStop(1,   hexA(p.color, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }, []);
 
   // ── Secret monster (？) — black blurred orb with white question mark
   const drawMystery = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, r: number) => {
@@ -1429,6 +1509,10 @@ export default function Game() {
         playSe('/se/gattai.wav', 0.7, seGattaiRef.current);
       }
 
+      // Light-orb burst at the merge point (colour = the new evolution)
+      const burstColor = level === MAX_LEVEL ? '#c8a0ff' : MONSTERS[level + 1].glowColor;
+      spawnBurst(mx, my, burstColor, level >= 6 || level === MAX_LEVEL);
+
       // Floating popups (juicy feedback)
       popupsRef.current.push({ x: mx, y: my, text: `+${gain}`, start: now, big: level === MAX_LEVEL });
       if (combo >= 2) {
@@ -1455,7 +1539,7 @@ export default function Game() {
         try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
       }
     }, 80);
-  }, [spawnMonster, triggerSecretFx, playSe]);
+  }, [spawnMonster, triggerSecretFx, playSe, spawnBurst]);
 
   // ── Drop current monster ────────────────────────────────────
   const drop = useCallback(() => {
@@ -1521,6 +1605,8 @@ export default function Game() {
     coolRef.current   = 0;
     secretFxRef.current = null;
     popupsRef.current = [];
+    particlesRef.current = [];
+    ringsRef.current = [];
     comboRef.current = { count: 0, lastTime: 0 };
     snapshotRef.current = null;
     viewingRef.current = false;
@@ -1536,12 +1622,28 @@ export default function Game() {
     const rightW = Matter.Bodies.rectangle(GR + WALL/2, H/2, WALL+2, H*2,{ isStatic: true, label: 'wall',   friction: 0.4 });
     Matter.Composite.add(engine.world, [ground, leftW, rightW]);
 
+    // "ぷにっ" — squash a body on a hard contact (landing / impact)
+    const triggerSquash = (b: import('matter-js').Body) => {
+      const d = bodyDataRef.current.get(b.id);
+      if (!d || d.isMerging) return;
+      const speed = Math.hypot(b.velocity.x, b.velocity.y);
+      if (speed < 4) return; // ignore gentle resting contacts
+      const now = Date.now();
+      if (d.squashT && now - d.squashT < 90) return; // don't re-trigger every frame
+      d.squashT = now;
+      d.squashAmp = Math.min(0.24, 0.02 + speed * 0.011);
+    };
+
     Matter.Events.on(engine, 'collisionStart', (event: import('matter-js').IEventCollision<import('matter-js').Engine>) => {
       for (const pair of event.pairs) {
-        if (pair.bodyA.isStatic || pair.bodyB.isStatic) continue;
         // compound bodies report child parts → resolve to the parent
         const a = pair.bodyA.parent ?? pair.bodyA;
         const b = pair.bodyB.parent ?? pair.bodyB;
+        // bounce squash on any hard contact (incl. landing on floor/wall)
+        if (!a.isStatic) triggerSquash(a);
+        if (!b.isStatic) triggerSquash(b);
+        // merge only when two dynamic monster bodies meet
+        if (pair.bodyA.isStatic || pair.bodyB.isStatic) continue;
         if (a === b) continue; // internal part-vs-part collision
         handleMerge(Matter, a, b);
       }
@@ -1651,7 +1753,15 @@ export default function Game() {
         const d = bodyDataRef.current.get(b.id);
         if (!d) continue;
         const r = MONSTERS[d.monsterId].radius;
-        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle);
+        // landing squash: damped, decaying oscillation (flatten → settle)
+        let sq = 0;
+        if (d.squashT) {
+          const el = (Date.now() - d.squashT) / 1000;
+          const DUR = 0.34;
+          if (el < DUR) sq = (d.squashAmp ?? 0) * Math.cos(el * 26) * (1 - el / DUR);
+          else d.squashT = 0;
+        }
+        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle, sq);
 
         // Red danger outline when the block reaches / nears the GAME
         // OVER line; released once it drops a bit below it.
@@ -1667,6 +1777,9 @@ export default function Game() {
           ctx.restore();
         }
       }
+
+      // Merge bursts (light orbs) over the monsters, beneath the HUD
+      drawParticles(ctx, !isPausedRef.current);
 
       drawHUD(ctx, s);
 
@@ -1691,7 +1804,7 @@ export default function Game() {
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawSecretFx, drawPauseOverlay, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawParticles, drawSecretFx, drawPauseOverlay, handleMerge]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
