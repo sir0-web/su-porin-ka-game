@@ -811,7 +811,7 @@ export default function Game() {
 
     // ── Bottom HUD bar: BEST | SCORE | 最大進化 ──
     const bX = GL + 4, bW = GW - 8;
-    const bY = BHUD_Y + 4, bH = H - bY - 8;
+    const bY = BHUD_Y + 4, bH = H - bY - 4;
     ctx.fillStyle = P.panel;
     rrect(ctx, bX, bY, bW, bH, 6); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -826,8 +826,8 @@ export default function Game() {
     ctx.beginPath(); ctx.moveTo(x2, bY + 8); ctx.lineTo(x2, bY + bH - 8); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x3, bY + 8); ctx.lineTo(x3, bY + bH - 8); ctx.stroke();
 
-    const labelY = bY + 8;
-    const valY = bY + bH / 2 + 9;
+    const labelY = bY + 9;
+    const valY = bY + bH - 18; // values sit near the bottom edge (no empty gap)
     ctx.textAlign = 'center';
 
     // BEST SCORE
