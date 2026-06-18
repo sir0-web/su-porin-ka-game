@@ -142,9 +142,10 @@ const MENU_RANK_BTN  = { w: 230, h: 44, x: CX - 115, y: 354 };
 const MENU_SET_BTN   = { w: 230, h: 44, x: CX - 115, y: 410 };
 const MENU_HOW_BTN   = { w: 230, h: 44, x: CX - 115, y: 466 };
 // In-game / game-over button rects
-const GO_BTN = { w: 184, h: 44, x: CX - 92, y: 532 };          // retry
-const GO_VIEW_BTN = { w: 90, h: 38, x: CX - 92, y: 584 };      // view final board
-const GO_SHOT_BTN = { w: 90, h: 38, x: CX + 2, y: 584 };       // save screenshot
+const GO_BTN = { w: 324, h: 46, x: CX - 162, y: 500 };         // retry (primary, full width)
+const GO_TOP_BTN = { w: 102, h: 40, x: CX - 162, y: 558 };     // back to TOP menu
+const GO_VIEW_BTN = { w: 102, h: 40, x: CX - 51, y: 558 };     // view final board
+const GO_SHOT_BTN = { w: 102, h: 40, x: CX + 60, y: 558 };     // save screenshot
 // Buttons shown while gazing at the final board
 const GO_BACK_BTN = { w: 112, h: 34, x: 12, y: 10 };
 const GO_VSHOT_BTN = { w: 112, h: 34, x: W - 124, y: 10 };
@@ -1384,9 +1385,10 @@ export default function Game() {
       ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
     };
 
-    // Retry (primary) + view-board + screenshot (secondary row)
+    // Retry (primary) + TOP / view-board / screenshot (secondary row)
     btn(GO_BTN, '#1a0030', '#6030c0', '#a060ff', '#f0e0ff', '⚔  もう一度挑戦  ⚔', 15);
-    btn(GO_VIEW_BTN, '#0a2a10', '#2a9c46', '#6cff9a', '#e6ffe9', '👁 盤面を見る', 12);
+    btn(GO_TOP_BTN, '#2a2200', '#b89020', '#ffd24a', '#fff6d0', '🏠 TOPへ', 12);
+    btn(GO_VIEW_BTN, '#0a2a10', '#2a9c46', '#6cff9a', '#e6ffe9', '👁 盤面', 12);
     btn(GO_SHOT_BTN, '#06243a', '#1c84b8', '#5ec8ff', '#e6f6ff', '📷 保存', 12);
   }, [diamond, drawRanking]);
 
@@ -1863,14 +1865,12 @@ export default function Game() {
     });
   }, []);
 
-  // ── Start screen animation (mount) ─────────────────────────
-  useEffect(() => {
+  // ── Start screen render loop (reused on mount and on return to TOP) ──
+  const runStartLoop = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
-    gs.current.phase = 'start';
     const loop = () => {
       ctx.clearRect(0, 0, W, H);
       drawBG(ctx);
@@ -1882,8 +1882,31 @@ export default function Game() {
       }
     };
     rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
   }, [drawBG, drawWalls, drawCeiling, drawStart]);
+
+  // ── Return to the TOP menu (from the game-over screen) ──────
+  const goToTop = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    gs.current.phase = 'start';
+    viewingRef.current = false;
+    setUiPhase('start');
+    // stop the game-over jingle, resume the top BGM
+    const go = bgmGameoverRef.current;
+    if (go) { go.pause(); go.currentTime = 0; }
+    const bgm = bgmRef.current;
+    if (bgm) {
+      bgm.currentTime = 0;
+      if (bgmOnRef.current) bgm.play().catch(() => {});
+    }
+    runStartLoop();
+  }, [runStartLoop]);
+
+  // ── Start screen animation (mount) ─────────────────────────
+  useEffect(() => {
+    gs.current.phase = 'start';
+    runStartLoop();
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [runStartLoop]);
 
   // ── Responsive scale ────────────────────────────────────────
   useEffect(() => {
@@ -1961,6 +1984,8 @@ export default function Game() {
       } else if (inBtn(GO_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
+      } else if (inBtn(GO_TOP_BTN)) {
+        goToTop();
       } else if (inBtn(GO_VIEW_BTN)) {
         viewingRef.current = true;
       } else if (inBtn(GO_SHOT_BTN)) {
@@ -1969,7 +1994,7 @@ export default function Game() {
     } else {
       drop();
     }
-  }, [initGame, drop, saveScreenshot, unlockAudio]);
+  }, [initGame, drop, saveScreenshot, unlockAudio, goToTop]);
 
   return (
     <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
