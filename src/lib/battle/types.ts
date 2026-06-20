@@ -20,7 +20,7 @@ export const B_H = 660;         // board height used for the battle field (no bo
 export const DROP_COOLDOWN = 500;
 
 // How often each client broadcasts its board snapshot (ms).
-export const SNAPSHOT_INTERVAL = 90;
+export const SNAPSHOT_INTERVAL = 110;
 
 // Lobby auto-start: if humans haven't all readied within this time after
 // the owner could start, remaining empty/unready slots become CPU.

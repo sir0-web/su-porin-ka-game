@@ -14,6 +14,7 @@ type MEngine = import('matter-js').Engine;
 type MBody = import('matter-js').Body;
 
 const ORE_R = 13;
+const AUTO_ORE_MS = 3500; // pending ore auto-drops after this long without a player drop
 
 interface BData {
   level: number;       // monster level, or -1 for ore
@@ -47,6 +48,7 @@ export class LocalBoard {
   canDrop = true;
   coolUntil = 0;
   pendingOre = 0;     // ore waiting to drop on next turn
+  pendingSince = 0;   // when the current pending batch first arrived (ms)
   score = 0;
   maxLevel = 0;
   dead = false;
@@ -208,19 +210,25 @@ export class LocalBoard {
     setTimeout(() => { this.canDrop = true; }, DROP_COOLDOWN);
 
     // Release any pending ore that was queued from opponents' attacks.
-    if (this.pendingOre > 0) {
-      const n = this.pendingOre;
-      this.pendingOre = 0;
-      for (let i = 0; i < n; i++) {
-        const ox = B_GL + ORE_R + 4 + this.rng() * (B_GR - B_GL - 2 * ORE_R - 8);
-        setTimeout(() => { if (!this.dead) this.spawnOre(ox, B_DROP_Y - 10 - (i % 3) * 8); }, 120 + i * 70);
-      }
-    }
+    this.releasePendingOre();
     return true;
+  }
+
+  // Drop all queued ore into the field (spread across the top).
+  private releasePendingOre() {
+    if (this.pendingOre <= 0) return;
+    const n = this.pendingOre;
+    this.pendingOre = 0;
+    this.pendingSince = 0;
+    for (let i = 0; i < n; i++) {
+      const ox = B_GL + ORE_R + 4 + this.rng() * (B_GR - B_GL - 2 * ORE_R - 8);
+      setTimeout(() => { if (!this.dead) this.spawnOre(ox, B_DROP_Y - 10 - (i % 3) * 8); }, 120 + i * 70);
+    }
   }
 
   receiveOre(count: number) {
     if (this.dead) return;
+    if (this.pendingOre === 0) this.pendingSince = Date.now();
     this.pendingOre = Math.min(this.pendingOre + count, 24);
   }
 
@@ -233,6 +241,13 @@ export class LocalBoard {
     if (this.dead) return false;
     const M = this.M;
     M.Engine.update(this.engine, dt > 0 ? Math.min(dt, 33) : 16);
+
+    // Anti-stall: if ore has been waiting too long without the player
+    // dropping, it falls on its own. Otherwise a player could survive by
+    // never dropping (never releasing the ore sent to them).
+    if (this.pendingOre > 0 && this.pendingSince > 0 && Date.now() - this.pendingSince > AUTO_ORE_MS) {
+      this.releasePendingOre();
+    }
 
     const MAXV = 32, MAXW = 0.5;
     for (const b of M.Composite.allBodies(this.engine.world)) {

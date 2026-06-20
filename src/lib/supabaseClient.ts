@@ -32,7 +32,7 @@ export function getSupabaseBrowser(): SupabaseClient | null {
   try {
     cached = createClient(url, key, {
       auth: { persistSession: false },
-      realtime: { params: { eventsPerSecond: 20 } },
+      realtime: { params: { eventsPerSecond: 50 } },
     });
   } catch {
     cached = null;

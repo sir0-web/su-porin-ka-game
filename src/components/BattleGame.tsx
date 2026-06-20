@@ -64,6 +64,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const burstRef = useRef<Burst[]>([]);
   const rafRef = useRef(0);
   const lastSnapRef = useRef(0);
+  const txRef = useRef(0);   // snapshots sent (debug)
+  const rxRef = useRef(0);   // snapshots received (debug)
   const matterRef = useRef<typeof import('matter-js') | null>(null);
 
   // ── Preprocess monster sprites (same as the solo game) ──
@@ -261,7 +263,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         msg.order.forEach((id) => { if (!namesRef.current.has(id)) namesRef.current.set(id, id); });
         handlersRef.current.beginGame(msg.order, msg.seed);
       },
-      onSnapshot: (msg) => { snapsRef.current.set(msg.id, msg); },
+      onSnapshot: (msg) => { rxRef.current++; snapsRef.current.set(msg.id, msg); },
       onAttack: (msg) => {
         const lb = boardsRef.current.get(msg.to);
         if (lb) { lb.receiveOre(msg.count); }
@@ -561,7 +563,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
           lastSnapRef.current = ts;
           const net = netRef.current;
           if (net && !offlineRef.current) {
-            boardsRef.current.forEach((b, id) => net.sendSnapshot(b.serialize(id)));
+            boardsRef.current.forEach((b, id) => { net.sendSnapshot(b.serialize(id)); txRef.current++; });
           }
         }
       }
@@ -577,6 +579,18 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       });
 
       drawFx(ctx);
+
+      // Debug readout (online only): shows whether snapshots flow.
+      if (!offlineRef.current) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(8, ch - 24, 250, 18);
+        ctx.fillStyle = '#9cf';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} 盤面:${orderRef.current.length}`, 12, ch - 15);
+        ctx.restore();
+      }
 
       rafRef.current = requestAnimationFrame(loop);
     };
