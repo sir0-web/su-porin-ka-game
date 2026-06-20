@@ -768,18 +768,21 @@ export default function Game() {
     ctx.fillStyle = tg; ctx.fillRect(0, CEILING_Y - WALL, W, WALL);
 
     // Outer top/bottom bands so the whole canvas (HUD included) sits
-    // inside a closed frame, matching the full-height side walls
-    const otg = ctx.createLinearGradient(0, 0, 0, WALL);
+    // inside a closed frame, matching the full-height side walls.
+    // Thin (4px) so it sits in the existing margin above/below the HUD
+    // panels instead of covering them.
+    const OUTER = 4;
+    const otg = ctx.createLinearGradient(0, 0, 0, OUTER);
     otg.addColorStop(0, '#10103a'); otg.addColorStop(1, '#060618');
-    ctx.fillStyle = otg; ctx.fillRect(0, 0, W, WALL);
+    ctx.fillStyle = otg; ctx.fillRect(0, 0, W, OUTER);
 
-    const obg = ctx.createLinearGradient(0, H - WALL, 0, H);
+    const obg = ctx.createLinearGradient(0, H - OUTER, 0, H);
     obg.addColorStop(0, '#060618'); obg.addColorStop(1, '#10103a');
-    ctx.fillStyle = obg; ctx.fillRect(0, H - WALL, W, WALL);
+    ctx.fillStyle = obg; ctx.fillRect(0, H - OUTER, W, OUTER);
 
     ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, WALL); ctx.lineTo(W, WALL); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, H - WALL); ctx.lineTo(W, H - WALL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, OUTER); ctx.lineTo(W, OUTER); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, H - OUTER); ctx.lineTo(W, H - OUTER); ctx.stroke();
 
     // Inner frame edges around the play field (top..floor)
     ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
