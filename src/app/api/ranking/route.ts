@@ -10,7 +10,7 @@ async function topTen(): Promise<RankEntry[]> {
   const supabase = getSupabaseAdmin();
   if (!supabase) throw new Error('Supabase is not configured');
   const { data, error } = await supabase
-    .from('rankings')
+    .from('suiga_rankings')
     .select('name, score, max_level')
     .order('score', { ascending: false })
     .limit(10);
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const supabase = getSupabaseAdmin();
     if (!supabase) throw new Error('Supabase is not configured');
     const { error } = await supabase
-      .from('rankings')
+      .from('suiga_rankings')
       .insert({ name, score, max_level: maxLevel });
     if (error) throw error;
     return NextResponse.json(await topTen());
