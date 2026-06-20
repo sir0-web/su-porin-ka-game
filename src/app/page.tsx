@@ -1,4 +1,4 @@
-import Game from '@/components/Game';
+import GameRoot from '@/components/GameRoot';
 
 export default function Page() {
   return (
@@ -19,7 +19,7 @@ export default function Page() {
         padding: 0,
       }}
     >
-      <Game />
+      <GameRoot />
 
       {/* Footer */}
       <div
