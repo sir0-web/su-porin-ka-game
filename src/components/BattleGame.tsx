@@ -73,6 +73,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const matchEndRef = useRef(0);      // wall-clock ms when the match ends
   const resultsDoneRef = useRef(false);
   const matchLeftRef = useRef(0);     // cached remaining seconds (avoid re-render spam)
+  const connectedRef = useRef(false); // net connected once; persists across phases
   const matterRef = useRef<typeof import('matter-js') | null>(null);
 
   // ── Preprocess monster sprites (same as the solo game) ──
@@ -229,10 +230,13 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const handlersRef = useRef({ beginGame });
   handlersRef.current = { beginGame };
 
-  // ── Networking setup (runs once when entering the lobby) ────
+  // ── Networking setup — connect ONCE, keep the connection alive for the
+  //    whole battle session (lobby → countdown → playing → result). It is
+  //    only torn down on unmount, NOT on phase changes. (Tearing it down
+  //    on phase change previously killed the channel right at game start.)
   useEffect(() => {
-    if (phase !== 'lobby') return;
-    let cancelled = false;
+    if (phase !== 'lobby' || connectedRef.current) return;
+    connectedRef.current = true;
     const online = isOnlineConfigured();
     offlineRef.current = !online;
 
@@ -254,7 +258,6 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         setStatus(isOwner ? `ルーム作成（オーナー）` : `ルームに参加`);
       },
       onLobby: (hs, rm) => {
-        if (cancelled) return;
         setHumans(hs);
         setRoom(rm);
         isOwnerRef.current = (hs[0]?.id === selfId);
@@ -282,12 +285,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     namesRef.current.set(selfId, name || 'あなた');
     setStatus('マッチング中…');
     net.connect(name || 'あなた');
-
-    return () => {
-      cancelled = true;
-      net.leave();
-    };
-    // Connect exactly once per lobby entry; handlers are read via refs.
+    // No cleanup here — the connection must survive phase changes. It is
+    // released by the unmount effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
@@ -298,10 +297,10 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       if (phaseRef.current !== 'lobby') return;
       // fill empty slots with CPU Lv3 (ensuring >=2 participants), then start
       const cpus = room.cpus.slice();
-      let idx = humans.length + cpus.length;
       while (humans.length + cpus.length < MAX_PLAYERS) {
+        const used = new Set(cpus.map((c) => c.index));
+        let idx = 0; while (used.has(idx)) idx++;
         cpus.push({ index: idx, level: 3 as CpuLevel, name: 'CPU Lv3' });
-        idx++;
       }
       applyCpus(cpus);
       setTimeout(() => doStart(), 300);
@@ -360,9 +359,14 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     cpus.forEach((c) => namesRef.current.set(`cpu_${c.index}`, c.name));
     if (!offlineRef.current) netRef.current?.setCpus(cpus);
   };
-  const addCpu = (index: number, level: CpuLevel) => {
-    const cur = room.cpus.filter((c) => c.index !== index);
-    applyCpus([...cur, { index, level, name: `CPU Lv${level}` }]);
+  // Add a CPU using the lowest free unique id (NOT the slot position, which
+  // shifts as humans join/leave and used to collide → overwrite an existing
+  // CPU instead of adding a new one).
+  const addCpu = (level: CpuLevel) => {
+    if (participantCount >= MAX_PLAYERS) return;
+    const used = new Set(room.cpus.map((c) => c.index));
+    let idx = 0; while (used.has(idx)) idx++;
+    applyCpus([...room.cpus, { index: idx, level, name: `CPU Lv${level}` }]);
   };
   const removeCpu = (index: number) => {
     applyCpus(room.cpus.filter((c) => c.index !== index));
@@ -806,7 +810,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           <span style={{ fontSize: 10, color: '#8a7a50', width: '100%' }}>CPUへ切り替え（強さ）</span>
                           {[1, 2, 3, 4, 5].map((lv) => (
-                            <button key={lv} onClick={() => addCpu(s.index, lv as CpuLevel)} style={cpuLvBtn}>Lv{lv}</button>
+                            <button key={lv} onClick={() => addCpu(lv as CpuLevel)} style={cpuLvBtn}>Lv{lv}</button>
                           ))}
                         </div>
                       ) : (
