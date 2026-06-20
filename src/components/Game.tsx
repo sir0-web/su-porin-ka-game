@@ -538,6 +538,31 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
     diamond(ctx, GL, (CEILING_Y + FLOOR_Y) / 2, 5);
     diamond(ctx, GR, (CEILING_Y + FLOOR_Y) / 2, 5);
+
+    // ── Rich gold outer frame (all 4 canvas edges) ──
+    ctx.save();
+    ctx.strokeStyle = P.gold;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = P.goldBrt;
+    ctx.shadowBlur = 10;
+    rrect(ctx, 2.5, 2.5, W - 5, H - 5, 10);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // bright inner hairline for a jeweled look
+    ctx.strokeStyle = hexA(P.goldBrt, 0.55);
+    ctx.lineWidth = 1;
+    rrect(ctx, 6, 6, W - 12, H - 12, 8);
+    ctx.stroke();
+    // small gold corner diamonds on the frame for extra richness
+    [[8, 8], [W - 8, 8], [8, H - 8], [W - 8, H - 8]].forEach(([dx, dy]) => {
+      ctx.fillStyle = P.goldBrt;
+      ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.moveTo(dx, dy - 3); ctx.lineTo(dx + 3, dy);
+      ctx.lineTo(dx, dy + 3); ctx.lineTo(dx - 3, dy);
+      ctx.closePath(); ctx.fill();
+    });
+    ctx.restore();
   }, [diamond]);
 
   // ── Ceiling / Danger zone ───────────────────────────────────
@@ -563,10 +588,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   // ── HUD ─────────────────────────────────────────────────────
   const drawHUD = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
-    const py = 6, ph = CEILING_Y - WALL - py - 4; // sit above the top frame band
+    // Even margin (MG) from the gold frame on all sides.
+    const MG = 8;
+    const py = MG, ph = (CEILING_Y - WALL) - py - MG; // even gap top & above the top band
 
-    // ── Top-left: NEXT panel (moved here from the right) ──
-    const nw = 84, nx = GL + 4;
+    // ── Top-left: NEXT panel (even margin from the frame) ──
+    const nw = 84, nx = MG;
     ctx.fillStyle = P.panel;
     rrect(ctx, nx, py, nw, ph, 5); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -620,9 +647,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       }
     }
 
-    // ── Bottom HUD bar: BEST | SCORE | 最大進化 ──
-    const bX = GL + 4, bW = GW - 8;
-    const bY = BHUD_Y + 4, bH = H - bY - 4;
+    // ── Bottom HUD bar: BEST | SCORE | 最大進化 (even margin from frame) ──
+    const bX = MG, bW = W - 2 * MG;
+    const bY = BHUD_Y + MG, bH = H - bY - MG;
     ctx.fillStyle = P.panel;
     rrect(ctx, bX, bY, bW, bH, 6); ctx.fill();
     ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
@@ -1934,9 +1961,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         {(() => {
           const btnBase: React.CSSProperties = {
             position: 'absolute',
-            top: 6,
-            width: 36,
-            height: 36,
+            top: 12,
+            width: 34,
+            height: 34,
             background: 'rgba(6,6,28,0.88)',
             border: '1.5px solid #c8a030',
             borderRadius: 8,
@@ -1955,7 +1982,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             <>
               {/* サウンドON/OFF（全フェーズ共通） */}
               <button
-                style={{ ...btnBase, right: 6 }}
+                style={{ ...btnBase, right: 12 }}
                 onClick={() => { unlockAudio(); const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
               >
                 {soundOn ? '🔊' : '🔇'}
@@ -1963,7 +1990,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
               {/* 一時停止（ゲーム中のみ） */}
               {uiPhase === 'playing' && (
                 <button
-                  style={{ ...btnBase, right: 48 }}
+                  style={{ ...btnBase, right: 54 }}
                   onClick={togglePause}
                 >
                   {isPaused ? '▶' : '⏸'}
@@ -1972,7 +1999,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
               {/* 進化順を確認（停止ボタンの左・ゲーム中のみ） */}
               {uiPhase === 'playing' && (
                 <button
-                  style={{ ...btnBase, right: 90 }}
+                  style={{ ...btnBase, right: 96 }}
                   onClick={openEvolution}
                   title="進化順を見る"
                 >
