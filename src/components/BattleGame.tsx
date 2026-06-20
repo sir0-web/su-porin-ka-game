@@ -602,11 +602,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       if (!offlineRef.current) {
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(8, ch - 24, 360, 18);
+        ctx.fillRect(8, ch - 24, 470, 18);
         ctx.fillStyle = '#9cf';
         ctx.font = '11px monospace';
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} send:${netRef.current?.lastSend ?? '-'} 盤面:${orderRef.current.length}`, 12, ch - 15);
+        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} send:${netRef.current?.lastSend ?? '-'} ch:${netRef.current?.roomStatus ?? '-'} 盤面:${orderRef.current.length}`, 12, ch - 15);
         ctx.restore();
       }
 

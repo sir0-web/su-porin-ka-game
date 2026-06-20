@@ -122,7 +122,10 @@ export class BattleNet {
     ch.on('broadcast', { event: 'dead' }, ({ payload }) => this.cb.onDead?.(payload as DeadMsg));
 
     await new Promise<void>((resolve) => {
-      ch.subscribe(async (status) => {
+      ch.subscribe(async (status, err) => {
+        this.roomStatus = String(status);
+        // eslint-disable-next-line no-console
+        console.log('[suiga] room subscribe status:', status, err ?? '');
         if (status === 'SUBSCRIBED') {
           await ch.track(this.presence());
           if (this.isOwner) this.broadcastRoomState();
@@ -207,15 +210,22 @@ export class BattleNet {
   }
 
   // ── Gameplay messages ────────────────────────────────────────
-  lastSend = '-';  // last broadcast send result (debug): ok / rate limited / error
+  lastSend = '-';      // last broadcast send result (debug)
+  roomStatus = '-';    // last room channel subscribe status (debug)
+  private logged = 0;
   sendSnapshot(msg: SnapshotMsg) {
+    if (!this.roomCh) { this.lastSend = 'no-ch'; return; }
     try {
-      const p = this.roomCh?.send({ type: 'broadcast', event: 'snapshot', payload: msg }) as
+      const r = this.roomCh.send({ type: 'broadcast', event: 'snapshot', payload: msg }) as
         | Promise<string> | string | undefined;
-      if (p && typeof (p as Promise<string>).then === 'function') {
-        (p as Promise<string>).then((r) => { this.lastSend = String(r); }).catch(() => { this.lastSend = 'reject'; });
-      } else if (typeof p === 'string') {
-        this.lastSend = p;
+      if (r && typeof (r as Promise<string>).then === 'function') {
+        if (this.lastSend === '-') this.lastSend = 'pending';
+        (r as Promise<string>).then((v) => {
+          this.lastSend = String(v);
+          if (this.logged < 2) { this.logged++; /* eslint-disable-next-line no-console */ console.log('[suiga] snapshot send result:', v); }
+        }).catch((e) => { this.lastSend = 'rej'; /* eslint-disable-next-line no-console */ console.log('[suiga] snapshot send error:', e); });
+      } else {
+        this.lastSend = 'sync:' + String(r);
       }
     } catch { this.lastSend = 'throw'; }
   }
