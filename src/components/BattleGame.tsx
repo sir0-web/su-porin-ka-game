@@ -219,7 +219,13 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     setPhaseBoth('countdown');
   }, [room.cpus, routeAttack, selfId, onLocalDeath]);
 
-  // ── Networking setup ───────────────────────────────────────
+  // Keep the latest game handlers in a ref so the networking effect can
+  // run ONCE per lobby session without re-subscribing every time these
+  // callbacks are recreated (which would tear down & reset the room).
+  const handlersRef = useRef({ beginGame, assignPlace, finishIfDone });
+  handlersRef.current = { beginGame, assignPlace, finishIfDone };
+
+  // ── Networking setup (runs once when entering the lobby) ────
   useEffect(() => {
     if (phase !== 'lobby') return;
     let cancelled = false;
@@ -253,7 +259,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       },
       onStart: (msg) => {
         msg.order.forEach((id) => { if (!namesRef.current.has(id)) namesRef.current.set(id, id); });
-        beginGame(msg.order, msg.seed);
+        handlersRef.current.beginGame(msg.order, msg.seed);
       },
       onSnapshot: (msg) => { snapsRef.current.set(msg.id, msg); },
       onAttack: (msg) => {
@@ -262,11 +268,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       },
       onDead: (msg) => {
         if (isOwnerRef.current) {
-          if (msg.place === 0) assignPlace(msg.id);     // a human reported death
-          else { placementsRef.current.set(msg.id, msg.place); finishIfDone(); }
+          if (msg.place === 0) handlersRef.current.assignPlace(msg.id);   // a human reported death
+          else { placementsRef.current.set(msg.id, msg.place); handlersRef.current.finishIfDone(); }
         } else if (msg.place > 0) {
           placementsRef.current.set(msg.id, msg.place);
-          finishIfDone();
+          handlersRef.current.finishIfDone();
         }
       },
       onError: (reason) => {
@@ -286,7 +292,9 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       cancelled = true;
       net.leave();
     };
-  }, [phase, name, selfId, beginGame, assignPlace, finishIfDone]);
+    // Connect exactly once per lobby entry; handlers are read via refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   // ── Owner: 1-minute force-CPU auto start ───────────────────
   useEffect(() => {
