@@ -767,6 +767,20 @@ export default function Game() {
     tg.addColorStop(0, '#060618'); tg.addColorStop(1, '#10103a');
     ctx.fillStyle = tg; ctx.fillRect(0, CEILING_Y - WALL, W, WALL);
 
+    // Outer top/bottom bands so the whole canvas (HUD included) sits
+    // inside a closed frame, matching the full-height side walls
+    const otg = ctx.createLinearGradient(0, 0, 0, WALL);
+    otg.addColorStop(0, '#10103a'); otg.addColorStop(1, '#060618');
+    ctx.fillStyle = otg; ctx.fillRect(0, 0, W, WALL);
+
+    const obg = ctx.createLinearGradient(0, H - WALL, 0, H);
+    obg.addColorStop(0, '#060618'); obg.addColorStop(1, '#10103a');
+    ctx.fillStyle = obg; ctx.fillRect(0, H - WALL, W, WALL);
+
+    ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, WALL); ctx.lineTo(W, WALL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, H - WALL); ctx.lineTo(W, H - WALL); ctx.stroke();
+
     // Inner frame edges around the play field (top..floor)
     ctx.strokeStyle = P.wallEdge; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(GL, CEILING_Y); ctx.lineTo(GL, FLOOR_Y); ctx.stroke();
@@ -2138,7 +2152,7 @@ export default function Game() {
   }, [initGame, drop, saveScreenshot, unlockAudio, goToTop]);
 
   return (
-    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
+    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden', marginTop: 28 }}>
       <div ref={wrapRef} style={{ position: 'relative', width: W, height: H }}>
         <canvas
           ref={canvasRef}
