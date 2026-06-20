@@ -81,8 +81,9 @@ export class BattleNet {
       });
     });
 
+    const now = Date.now();
     const open = ads
-      .filter((a) => !a.started && a.count < MAX_PLAYERS)
+      .filter((a) => !a.started && a.count < MAX_PLAYERS && now - (a.updatedAt ?? 0) < 20_000)
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
     if (open.length > 0) {
@@ -186,23 +187,17 @@ export class BattleNet {
     this.roomCh?.track(this.presence());
   }
 
-  addCpu(index: number, level: CpuLevel) {
-    if (!this.isOwner) return;
-    this.room.cpus = this.room.cpus.filter((c) => c.index !== index);
-    this.room.cpus.push({ index, level, name: `CPU Lv${level}` });
+  // Authoritative CPU list is owned by the lobby UI (which only the owner
+  // can edit). We mark ourselves owner here so the two notions never drift.
+  setCpus(cpus: { index: number; level: CpuLevel; name: string }[]) {
+    this.isOwner = true;
+    this.room.cpus = cpus;
     this.broadcastRoomState();
-    this.emitLobby();
-  }
-
-  removeCpu(index: number) {
-    if (!this.isOwner) return;
-    this.room.cpus = this.room.cpus.filter((c) => c.index !== index);
-    this.broadcastRoomState();
-    this.emitLobby();
+    this.advertise();
   }
 
   startGame(order: string[], seed: number) {
-    if (!this.isOwner) return;
+    this.isOwner = true;
     this.room.started = true;
     this.room.order = order;
     this.room.seed = seed;

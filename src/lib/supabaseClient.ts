@@ -13,11 +13,19 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 let cached: SupabaseClient | null | undefined;
 
+// A real anon/publishable key is long (legacy JWT ~150+ chars, new
+// `sb_publishable_...` ~40+). Reject empty values and obvious
+// placeholders so a not-yet-filled key falls back to offline instead of
+// trying (and failing) to connect online.
+function validKey(k: string | undefined): k is string {
+  return typeof k === 'string' && k.trim().length >= 30 && !/[ぁ-んァ-ヶ一-龠]/.test(k);
+}
+
 export function getSupabaseBrowser(): SupabaseClient | null {
   if (cached !== undefined) return cached;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) {
+  if (!url || !validKey(key)) {
     cached = null;
     return null;
   }
@@ -33,5 +41,5 @@ export function getSupabaseBrowser(): SupabaseClient | null {
 }
 
 export function isOnlineConfigured(): boolean {
-  return !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  return !!process.env.NEXT_PUBLIC_SUPABASE_URL && validKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }

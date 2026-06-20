@@ -293,13 +293,14 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     if (phase !== 'lobby' || !isOwnerRef.current || offlineRef.current) return;
     const t = setTimeout(() => {
       if (phaseRef.current !== 'lobby') return;
-      const net = netRef.current;
-      if (!net) return;
-      // fill empty slots with CPU Lv3, ensure >=2 participants, then start
-      const used = humans.length + room.cpus.length;
-      for (let i = used, idx = humans.length + room.cpus.length; i < MAX_PLAYERS; i++, idx++) {
-        net.addCpu(idx, 3);
+      // fill empty slots with CPU Lv3 (ensuring >=2 participants), then start
+      const cpus = room.cpus.slice();
+      let idx = humans.length + cpus.length;
+      while (humans.length + cpus.length < MAX_PLAYERS) {
+        cpus.push({ index: idx, level: 3 as CpuLevel, name: 'CPU Lv3' });
+        idx++;
       }
+      applyCpus(cpus);
       setTimeout(() => doStart(), 300);
     }, FORCE_CPU_MS);
     return () => clearTimeout(t);
@@ -348,17 +349,20 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     }
   }, [buildOrder, beginGame]);
 
+  // Update the CPU list optimistically (instant UI feedback) AND, when
+  // online, broadcast it. This doesn't rely on the net layer's internal
+  // owner flag, so it can never silently no-op for the room owner.
+  const applyCpus = (cpus: { index: number; level: CpuLevel; name: string }[]) => {
+    setRoom((r) => ({ ...r, cpus }));
+    cpus.forEach((c) => namesRef.current.set(`cpu_${c.index}`, c.name));
+    if (!offlineRef.current) netRef.current?.setCpus(cpus);
+  };
   const addCpu = (index: number, level: CpuLevel) => {
-    if (offlineRef.current) {
-      setRoom((r) => ({ ...r, cpus: [...r.cpus.filter((c) => c.index !== index), { index, level, name: `CPU Lv${level}` }] }));
-      namesRef.current.set(`cpu_${index}`, `CPU Lv${level}`);
-    } else {
-      netRef.current?.addCpu(index, level);
-    }
+    const cur = room.cpus.filter((c) => c.index !== index);
+    applyCpus([...cur, { index, level, name: `CPU Lv${level}` }]);
   };
   const removeCpu = (index: number) => {
-    if (offlineRef.current) setRoom((r) => ({ ...r, cpus: r.cpus.filter((c) => c.index !== index) }));
-    else netRef.current?.removeCpu(index);
+    applyCpus(room.cpus.filter((c) => c.index !== index));
   };
 
   // ── Countdown ──────────────────────────────────────────────
@@ -725,7 +729,12 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       {isLandscape && phase === 'lobby' && (
         <Overlay>
           <Panel title="⚔ 対戦ルーム" wide>
-            <div style={{ fontSize: 11, color: '#8a7a50', textAlign: 'center', marginBottom: 10 }}>{status}</div>
+            <div style={{ fontSize: 11, color: '#8a7a50', textAlign: 'center', marginBottom: 10 }}>
+              {offlineRef.current ? '🔌 オフライン（CPU対戦）' : '🌐 オンライン'}
+              {isOwnerRef.current ? '・👑 あなたがオーナー' : '・参加者'}
+              {`・参加 ${participantCount}人`}
+              {status ? `（${status}）` : ''}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
               {slots.map((s) => (
                 <div key={s.index} style={{
