@@ -8,7 +8,7 @@ import { LocalBoard, type MergeFx } from '@/lib/battle/board';
 import { CpuController } from '@/lib/battle/cpu';
 import { BattleNet } from '@/lib/battle/net';
 import {
-  BW, B_H, B_GL, B_GR, B_CEILING_Y, B_FLOOR_Y, B_DROP_Y, B_WALL,
+  BW, B_H, B_GL, B_GR, B_CX, B_CEILING_Y, B_FLOOR_Y, B_DROP_Y, B_WALL,
   SNAPSHOT_INTERVAL, FORCE_CPU_MS, MAX_PLAYERS, MATCH_DURATION_MS, placeLabel, clientId, battleScore,
   type SnapshotMsg, type PresenceState, type RoomState, type CpuLevel, type BattlePhase,
 } from '@/lib/battle/types';
@@ -386,31 +386,29 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     return () => clearInterval(iv);
   }, [phase]);
 
-  // ── Layout: rects for each board ───────────────────────────
+  // ── Layout: all boards in a single horizontal row ──────────
+  //    Self is leftmost and a bit larger; opponents line up to its right
+  //    (full height each → much better visibility than a vertical stack).
   const computeRects = useCallback((cw: number, ch: number) => {
     const order = orderRef.current;
     const opp = order.filter((id) => id !== selfId);
+    const ids = [selfId, ...opp];
     const rects = new Map<string, { x: number; y: number; w: number; h: number }>();
-    const pad = 10;
-    const PLATE = 26; // reserve room under each board for the name/score plate
+    const pad = 8, gap = 8, PLATE = 24;
     const fit = (ax: number, ay: number, aw: number, ah: number) => {
       const ah2 = Math.max(40, ah - PLATE);
       let w = aw, h = w / BOARD_ASPECT;
       if (h > ah2) { h = ah2; w = h * BOARD_ASPECT; }
       return { x: ax + (aw - w) / 2, y: ay + (ah2 - h) / 2, w, h };
     };
-    if (opp.length === 0) {
-      rects.set(selfId, fit(pad, pad, cw - 2 * pad, ch - 2 * pad));
-      return rects;
-    }
-    // self large on the left, opponents stacked on the right
-    const leftW = cw * 0.6;
-    rects.set(selfId, fit(pad, pad, leftW - 1.5 * pad, ch - 2 * pad));
-    const rightX = leftW + pad * 0.5;
-    const rightW = cw - rightX - pad;
-    const cellH = (ch - 2 * pad) / opp.length;
-    opp.forEach((id, i) => {
-      rects.set(id, fit(rightX, pad + i * cellH, rightW, cellH - pad * 0.6));
+    const weights = ids.map((id) => (id === selfId ? 1.5 : 1.0));
+    const total = weights.reduce((a, b) => a + b, 0);
+    const avail = cw - pad * 2 - gap * (ids.length - 1);
+    let x = pad;
+    ids.forEach((id, i) => {
+      const colW = (avail * weights[i]) / total;
+      rects.set(id, fit(x, pad, colW, ch - pad * 2));
+      x += colW + gap;
     });
     return rects;
   }, [selfId]);
@@ -657,23 +655,25 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     if (phase !== 'playing') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    let downX = 0, downT = 0, moved = false;
-    const toBoardX = (clientX: number) => {
-      // map across the whole window so swiping ANYWHERE works (spec ①)
-      const frac = Math.max(0, Math.min(1, clientX / window.innerWidth));
-      return B_GL + frac * (B_GR - B_GL);
-    };
-    const move = (clientX: number) => {
+    // Relative drag with a gain so a SMALL finger movement moves the block a
+    // LOT (light/responsive). Works anywhere on screen (spec ①).
+    const GAIN = 2.6; // board-units moved per screen px of finger travel
+    let downX = 0, startDropX = B_CX, downT = 0, moved = false;
+    const onDown = (x: number) => {
       const b = boardsRef.current.get(selfId);
-      if (b && !b.dead) b.moveTo(toBoardX(clientX));
+      downX = x; startDropX = b ? b.dropX : B_CX; downT = Date.now(); moved = false;
     };
-    const onDown = (x: number) => { downX = x; downT = Date.now(); moved = false; move(x); };
-    const onMove = (x: number) => { if (Math.abs(x - downX) > 6) moved = true; move(x); };
+    const onMove = (x: number) => {
+      const b = boardsRef.current.get(selfId);
+      if (!b || b.dead) return;
+      if (Math.abs(x - downX) > 4) moved = true;
+      b.moveTo(startDropX + (x - downX) * GAIN);
+    };
     const onUp = () => {
       const b = boardsRef.current.get(selfId);
       if (!b || b.dead) return;
-      if (!moved && Date.now() - downT < 400) b.drop();
-      else if (moved) b.drop(); // a swipe also drops at the chosen spot
+      if (!moved && Date.now() - downT < 400) b.drop(); // tap = drop in place
+      else if (moved) b.drop();                          // swipe = position then drop
     };
     const md = (e: MouseEvent) => onDown(e.clientX);
     const mm = (e: MouseEvent) => { if (e.buttons) onMove(e.clientX); };
