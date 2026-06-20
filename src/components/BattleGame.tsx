@@ -68,8 +68,6 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const burstRef = useRef<Burst[]>([]);
   const rafRef = useRef(0);
   const lastSnapRef = useRef(0);
-  const txRef = useRef(0);   // snapshots sent (debug)
-  const rxRef = useRef(0);   // snapshots received (debug)
   const matchEndRef = useRef(0);      // wall-clock ms when the match ends
   const resultsDoneRef = useRef(false);
   const matchLeftRef = useRef(0);     // cached remaining seconds (avoid re-render spam)
@@ -268,7 +266,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         msg.order.forEach((id) => { if (!namesRef.current.has(id)) namesRef.current.set(id, id); });
         handlersRef.current.beginGame(msg.order, msg.seed);
       },
-      onSnapshot: (msg) => { rxRef.current++; snapsRef.current.set(msg.id, msg); },
+      onSnapshot: (msg) => { snapsRef.current.set(msg.id, msg); },
       onAttack: (msg) => {
         const lb = boardsRef.current.get(msg.to);
         if (lb) { lb.receiveOre(msg.count); }
@@ -563,7 +561,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
           lastSnapRef.current = ts;
           const net = netRef.current;
           if (net && !offlineRef.current) {
-            boardsRef.current.forEach((b, id) => { net.sendSnapshot(b.serialize(id)); txRef.current++; });
+            boardsRef.current.forEach((b, id) => net.sendSnapshot(b.serialize(id)));
           }
         }
 
@@ -587,7 +585,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
       drawFx(ctx);
 
-      // Remaining-time badge (top center)
+      // Remaining-time badge (top center) ─ (debug HUD removed)
       if (phaseRef.current === 'playing') {
         const m = Math.floor(matchLeftRef.current / 60), sgs = matchLeftRef.current % 60;
         const label = `${m}:${String(sgs).padStart(2, '0')}`;
@@ -599,18 +597,6 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         ctx.fillStyle = matchLeftRef.current <= 15 ? '#ff7070' : '#ffe050';
         ctx.font = 'bold 18px "Oswald", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(label, cw / 2, 20);
-        ctx.restore();
-      }
-
-      // Debug readout (online only): shows whether snapshots flow.
-      if (!offlineRef.current) {
-        ctx.save();
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(8, ch - 24, 470, 18);
-        ctx.fillStyle = '#9cf';
-        ctx.font = '11px monospace';
-        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} send:${netRef.current?.lastSend ?? '-'} ch:${netRef.current?.roomStatus ?? '-'} 盤面:${orderRef.current.length}`, 12, ch - 15);
         ctx.restore();
       }
 
