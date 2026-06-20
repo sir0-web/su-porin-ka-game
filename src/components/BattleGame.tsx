@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MONSTERS, MAX_LEVEL } from '@/lib/monsters';
 import { buildSprite, rrect, type Sprite } from '@/lib/sprites';
-import { drawMonster, drawOre } from '@/lib/draw';
+import { drawMonster, drawOre, evoName } from '@/lib/draw';
 import { LocalBoard, type MergeFx } from '@/lib/battle/board';
 import { CpuController } from '@/lib/battle/cpu';
 import { BattleNet } from '@/lib/battle/net';
 import {
   BW, B_H, B_GL, B_GR, B_CEILING_Y, B_FLOOR_Y, B_DROP_Y, B_WALL,
-  SNAPSHOT_INTERVAL, FORCE_CPU_MS, MAX_PLAYERS, placeLabel, clientId,
+  SNAPSHOT_INTERVAL, FORCE_CPU_MS, MAX_PLAYERS, MATCH_DURATION_MS, placeLabel, clientId, battleScore,
   type SnapshotMsg, type PresenceState, type RoomState, type CpuLevel, type BattlePhase,
 } from '@/lib/battle/types';
 import { isOnlineConfigured } from '@/lib/supabaseClient';
@@ -29,6 +29,10 @@ interface Slot {
 // Visual fly-ore burst from one board to another.
 interface FlyOre { fromId: string; toId: string; start: number; count: number; }
 interface Burst { id: string; x: number; y: number; color: string; big: boolean; start: number; }
+interface ResultRow {
+  id: string; name: string; isSelf: boolean; place: number;
+  score: number; combo: number; level: number; bscore: number; alive: boolean;
+}
 
 export default function BattleGame({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -45,7 +49,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const [room, setRoom] = useState<RoomState>({ hostId: '', started: false, cpus: [] });
   const [ready, setReady] = useState(false);
   const [count, setCount] = useState(3);
-  const [results, setResults] = useState<{ name: string; place: number; isSelf: boolean }[]>([]);
+  const [results, setResults] = useState<ResultRow[]>([]);
 
   const netRef = useRef<BattleNet | null>(null);
   const selfId = clientId();
@@ -66,6 +70,9 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const lastSnapRef = useRef(0);
   const txRef = useRef(0);   // snapshots sent (debug)
   const rxRef = useRef(0);   // snapshots received (debug)
+  const matchEndRef = useRef(0);      // wall-clock ms when the match ends
+  const resultsDoneRef = useRef(false);
+  const matchLeftRef = useRef(0);     // cached remaining seconds (avoid re-render spam)
   const matterRef = useRef<typeof import('matter-js') | null>(null);
 
   // ── Preprocess monster sprites (same as the solo game) ──
@@ -134,44 +141,38 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     else netRef.current?.sendAttack({ from: fromId, to: target, count });
   }, [pickTarget]);
 
-  // ── Placement (host-authoritative) ─────────────────────────
-  const finishIfDone = useCallback(() => {
-    if (placementsRef.current.size >= orderRef.current.length && orderRef.current.length > 0) {
-      const rows = orderRef.current.map((id) => ({
-        name: namesRef.current.get(id) ?? id,
-        place: placementsRef.current.get(id) ?? MAX_PLAYERS,
-        isSelf: id === selfId,
-      })).sort((a, b) => a.place - b.place);
-      setResults(rows);
-      setPhaseBoth('result');
-    }
+  // ── Finalize: rank by TOTAL battle score ───────────────────
+  // Survival alone no longer wins — score = 合体点 + 連鎖 + 最大進化
+  // (+ 生存ボーナス). The match ends when everyone is out OR time is up.
+  const finalize = useCallback(() => {
+    if (resultsDoneRef.current) return;
+    if (orderRef.current.length === 0) return;
+    resultsDoneRef.current = true;
+    const rows: ResultRow[] = orderRef.current.map((id) => {
+      const lb = boardsRef.current.get(id);
+      const sn = snapsRef.current.get(id);
+      const score = lb ? lb.score : (sn?.score ?? 0);
+      const combo = lb ? lb.maxCombo : (sn?.mc ?? 0);
+      const level = lb ? lb.maxLevel : (sn?.ml ?? 0);
+      const dead = lb ? lb.dead : !!sn?.dead;
+      return {
+        id, name: namesRef.current.get(id) ?? id, isSelf: id === selfId,
+        score, combo, level, alive: !dead,
+        bscore: battleScore(score, combo, level, !dead), place: 0,
+      };
+    });
+    rows.sort((a, b) => b.bscore - a.bscore);
+    rows.forEach((r, i) => { r.place = i + 1; });
+    setResults(rows);
+    setPhaseBoth('result');
   }, [selfId]);
 
-  const assignPlace = useCallback((id: string) => {
-    if (placementsRef.current.has(id)) return;
-    // Players still alive AFTER this death (exclude the one dying explicitly,
-    // so it works regardless of when the dead flag/snapshot lands).
-    const others = orderRef.current.filter((x) => x !== id && alive(x));
-    const place = others.length + 1;          // first to die in a 4-way = 4th
-    placementsRef.current.set(id, place);
-    netRef.current?.sendDead({ id, place });
-    // Only one left alive → they win (1st place); the match is over.
-    if (others.length === 1) {
-      placementsRef.current.set(others[0], 1);
-      netRef.current?.sendDead({ id: others[0], place: 1 });
-    }
-    finishIfDone();
-  }, [alive, finishIfDone]);
-
-  // A board I simulate just died.
-  const onLocalDeath = useCallback((id: string) => {
-    if (isOwnerRef.current) {
-      assignPlace(id);
-    } else if (id === selfId) {
-      // report to host; host assigns the authoritative place
-      netRef.current?.sendDead({ id: selfId, place: 0 });
-    }
-  }, [assignPlace, selfId, isOwnerRef]);
+  // A board I simulate just died → push an immediate snapshot so others
+  // see the dead state without waiting for the next tick.
+  const onBoardDead = useCallback((id: string) => {
+    const b = boardsRef.current.get(id);
+    if (b && !offlineRef.current) netRef.current?.sendSnapshot(b.serialize(id));
+  }, []);
 
   // ── Begin the match (shared by owner + members) ────────────
   const beginGame = useCallback(async (order: string[], seed: number) => {
@@ -179,6 +180,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     matterRef.current = M;
     orderRef.current = order;
     placementsRef.current.clear();
+    resultsDoneRef.current = false;
     snapsRef.current.clear();
     flyRef.current = [];
     burstRef.current = [];
@@ -198,7 +200,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     const mine = new LocalBoard(M, procRef.current, {
       onAttack: (c) => routeAttack(selfId, c),
       onMerge: onMerge(selfId),
-      onDead: () => onLocalDeath(selfId),
+      onDead: () => onBoardDead(selfId),
     }, seed);
     boardsRef.current.set(selfId, mine);
 
@@ -210,7 +212,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         const cb = new LocalBoard(M, procRef.current, {
           onAttack: (c) => routeAttack(id, c),
           onMerge: onMerge(id),
-          onDead: () => onLocalDeath(id),
+          onDead: () => onBoardDead(id),
         }, seed + i * 7919);
         boardsRef.current.set(id, cb);
         cpusRef.current.set(id, new CpuController(cb, level, seed + i * 104729));
@@ -219,13 +221,13 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
     setCount(3);
     setPhaseBoth('countdown');
-  }, [room.cpus, routeAttack, selfId, onLocalDeath]);
+  }, [room.cpus, routeAttack, selfId, onBoardDead]);
 
   // Keep the latest game handlers in a ref so the networking effect can
   // run ONCE per lobby session without re-subscribing every time these
   // callbacks are recreated (which would tear down & reset the room).
-  const handlersRef = useRef({ beginGame, assignPlace, finishIfDone });
-  handlersRef.current = { beginGame, assignPlace, finishIfDone };
+  const handlersRef = useRef({ beginGame });
+  handlersRef.current = { beginGame };
 
   // ── Networking setup (runs once when entering the lobby) ────
   useEffect(() => {
@@ -267,15 +269,6 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       onAttack: (msg) => {
         const lb = boardsRef.current.get(msg.to);
         if (lb) { lb.receiveOre(msg.count); }
-      },
-      onDead: (msg) => {
-        if (isOwnerRef.current) {
-          if (msg.place === 0) handlersRef.current.assignPlace(msg.id);   // a human reported death
-          else { placementsRef.current.set(msg.id, msg.place); handlersRef.current.finishIfDone(); }
-        } else if (msg.place > 0) {
-          placementsRef.current.set(msg.id, msg.place);
-          handlersRef.current.finishIfDone();
-        }
       },
       onError: (reason) => {
         if (reason === 'not-configured') {
@@ -382,8 +375,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     setCount(3);
     const iv = setInterval(() => {
       n -= 1;
-      if (n <= 0) { clearInterval(iv); setPhaseBoth('playing'); }
-      else setCount(n);
+      if (n <= 0) {
+        clearInterval(iv);
+        matchEndRef.current = Date.now() + MATCH_DURATION_MS;
+        setPhaseBoth('playing');
+      } else setCount(n);
     }, 800);
     return () => clearInterval(iv);
   }, [phase]);
@@ -566,6 +562,13 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
             boardsRef.current.forEach((b, id) => { net.sendSnapshot(b.serialize(id)); txRef.current++; });
           }
         }
+
+        // Match-end: everyone out OR time up → rank by total score.
+        const now = Date.now();
+        matchLeftRef.current = Math.max(0, Math.ceil((matchEndRef.current - now) / 1000));
+        const order = orderRef.current;
+        const allOut = order.length > 0 && order.every((id) => !alive(id));
+        if (!resultsDoneRef.current && (now >= matchEndRef.current || allOut)) finalize();
       }
 
       // render
@@ -580,15 +583,30 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
       drawFx(ctx);
 
+      // Remaining-time badge (top center)
+      if (phaseRef.current === 'playing') {
+        const m = Math.floor(matchLeftRef.current / 60), sgs = matchLeftRef.current % 60;
+        const label = `${m}:${String(sgs).padStart(2, '0')}`;
+        ctx.save();
+        ctx.fillStyle = 'rgba(6,6,28,0.85)';
+        rrect(ctx, cw / 2 - 42, 6, 84, 26, 7); ctx.fill();
+        ctx.strokeStyle = matchLeftRef.current <= 15 ? '#ff5050' : '#c8a030'; ctx.lineWidth = 1.5;
+        rrect(ctx, cw / 2 - 42, 6, 84, 26, 7); ctx.stroke();
+        ctx.fillStyle = matchLeftRef.current <= 15 ? '#ff7070' : '#ffe050';
+        ctx.font = 'bold 18px "Oswald", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, cw / 2, 20);
+        ctx.restore();
+      }
+
       // Debug readout (online only): shows whether snapshots flow.
       if (!offlineRef.current) {
         ctx.save();
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(8, ch - 24, 250, 18);
+        ctx.fillRect(8, ch - 24, 360, 18);
         ctx.fillStyle = '#9cf';
         ctx.font = '11px monospace';
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} 盤面:${orderRef.current.length}`, 12, ch - 15);
+        ctx.fillText(`tx:${txRef.current} rx:${rxRef.current} send:${netRef.current?.lastSend ?? '-'} 盤面:${orderRef.current.length}`, 12, ch - 15);
         ctx.restore();
       }
 
@@ -835,19 +853,36 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       {/* Result */}
       {phase === 'result' && (
         <Overlay>
-          <Panel title="🏆 リザルト">
-            {results.map((r) => (
-              <div key={r.name + r.place} style={{
-                display: 'flex', justifyContent: 'space-between', padding: '8px 12px', marginBottom: 6,
-                borderRadius: 8, fontSize: 16,
-                background: r.place === 1 ? 'rgba(255,210,80,0.16)' : 'rgba(8,8,28,0.7)',
-                border: `1px solid ${r.place === 1 ? '#ffd24a' : '#3a3a60'}`,
-                color: r.isSelf ? '#fff3c0' : '#e0d8c0', fontWeight: r.isSelf ? 700 : 400,
-              }}>
-                <span>{placeLabel(r.place)}{r.place === 1 ? ' 👑' : ''}</span>
-                <span>{r.name}{r.isSelf ? '（あなた）' : ''}</span>
-              </div>
-            ))}
+          <Panel title="🏆 リザルト（総合スコア）" wide>
+            {results.map((r) => {
+              const medal = r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : '４';
+              return (
+                <div key={r.id} style={{
+                  padding: '8px 12px', marginBottom: 6, borderRadius: 8,
+                  background: r.place === 1 ? 'rgba(255,210,80,0.16)' : 'rgba(8,8,28,0.7)',
+                  border: `1px solid ${r.place === 1 ? '#ffd24a' : '#3a3a60'}`,
+                  color: r.isSelf ? '#fff3c0' : '#e0d8c0',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 16, fontWeight: 700 }}>
+                      {medal} {placeLabel(r.place)}　{r.name}{r.isSelf ? '（あなた）' : ''}
+                    </span>
+                    <span style={{ fontSize: 20, fontWeight: 900, color: '#ffe050', fontFamily: '"Oswald", sans-serif' }}>
+                      {r.bscore.toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#9a8a6a', marginTop: 3, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <span>合体 {r.score.toLocaleString()}</span>
+                    <span>連鎖 ×{r.combo}</span>
+                    <span>最大進化 {evoName(r.level)}</span>
+                    <span>{r.alive ? '⛏ 生存ボーナス' : '💀 脱落'}</span>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ fontSize: 10, color: '#6a6a90', textAlign: 'center', marginTop: 4 }}>
+              総合スコア＝合体点＋連鎖×{300}＋最大進化×{1000}（＋生存{1500}）
+            </div>
             <div style={{ display: 'flex', gap: 10, marginTop: 14, justifyContent: 'center' }}>
               <button onClick={() => setPhaseBoth('lobby')} style={secondaryBtn}>もう一度</button>
               <button onClick={onExit} style={primaryBtn}>TOPへ</button>

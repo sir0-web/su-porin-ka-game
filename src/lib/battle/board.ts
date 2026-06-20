@@ -15,6 +15,8 @@ type MBody = import('matter-js').Body;
 
 const ORE_R = 13;
 const AUTO_ORE_MS = 3500; // pending ore auto-drops after this long without a player drop
+const COMBO_WINDOW = 850;  // ms within which merges chain into a combo
+const COMBO_CAP = 9;       // max combo multiplier
 
 interface BData {
   level: number;       // monster level, or -1 for ore
@@ -51,6 +53,9 @@ export class LocalBoard {
   pendingSince = 0;   // when the current pending batch first arrived (ms)
   score = 0;
   maxLevel = 0;
+  maxCombo = 0;
+  private comboCount = 0;
+  private comboLastTime = 0;
   dead = false;
   place = 0;
   private gameOverFrames = 0;
@@ -161,8 +166,15 @@ export class LocalBoard {
       this.data.delete(a.id); this.data.delete(b.id);
       this.merging.delete(a.id); this.merging.delete(b.id);
 
+      // Combo: merges chained within a short window multiply the score.
+      const now = Date.now();
+      if (now - this.comboLastTime < COMBO_WINDOW) this.comboCount++; else this.comboCount = 1;
+      this.comboLastTime = now;
+      const combo = Math.min(this.comboCount, COMBO_CAP);
+      if (combo > this.maxCombo) this.maxCombo = combo;
+
       const base = level === MAX_LEVEL ? SPECIAL_MERGE_SCORE : MONSTERS[level + 1].score;
-      this.score += base;
+      this.score += base * combo;
 
       if (level === MAX_LEVEL) {
         // special merge: both vanish; heavy attack
@@ -327,7 +339,7 @@ export class LocalBoard {
     return {
       id, b, o, pending: this.pendingOre,
       cur: this.currentLevel, next: this.nextLevel, dropX: Math.round(this.dropX),
-      score: this.score, dead: this.dead, place: this.place,
+      score: this.score, mc: this.maxCombo, ml: this.maxLevel, dead: this.dead, place: this.place,
     };
   }
 

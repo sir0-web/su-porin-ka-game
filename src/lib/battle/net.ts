@@ -207,8 +207,17 @@ export class BattleNet {
   }
 
   // ── Gameplay messages ────────────────────────────────────────
+  lastSend = '-';  // last broadcast send result (debug): ok / rate limited / error
   sendSnapshot(msg: SnapshotMsg) {
-    this.roomCh?.send({ type: 'broadcast', event: 'snapshot', payload: msg });
+    try {
+      const p = this.roomCh?.send({ type: 'broadcast', event: 'snapshot', payload: msg }) as
+        | Promise<string> | string | undefined;
+      if (p && typeof (p as Promise<string>).then === 'function') {
+        (p as Promise<string>).then((r) => { this.lastSend = String(r); }).catch(() => { this.lastSend = 'reject'; });
+      } else if (typeof p === 'string') {
+        this.lastSend = p;
+      }
+    } catch { this.lastSend = 'throw'; }
   }
   sendAttack(msg: AttackMsg) {
     this.roomCh?.send({ type: 'broadcast', event: 'attack', payload: msg });

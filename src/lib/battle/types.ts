@@ -82,6 +82,8 @@ export interface SnapshotMsg {
   next: number;               // next monster level
   dropX: number;
   score: number;
+  mc: number;                 // max combo achieved
+  ml: number;                 // max evolution level reached
   dead: boolean;
   place: number;              // finishing place (0 = still alive)
 }
@@ -122,6 +124,19 @@ export const ORE_BY_LEVEL: number[] = [
 ];
 // Special merge (two 知らない人 vanish) = big finisher attack.
 export const ORE_SPECIAL_MERGE = 10;
+
+// ─── 総合スコア（順位付けの基準）──────────────────────────────
+// 放置（何もしない）では勝てないよう、合体スコア・連鎖・最大進化と
+// いった「攻めた量」が支配的になるよう重み付けする。生存はボーナス
+// 扱い（生き残ると加点だが、それだけでは上位に来ない）。
+export const MATCH_DURATION_MS = 150_000; // 試合時間（全滅 or 時間切れで終了）
+export const SC_COMBO = 300;              // 最大連鎖 1 あたり
+export const SC_LEVEL = 1000;             // 最大進化 1 段あたり
+export const SC_SURVIVE = 1500;           // 時間切れ時に生存していたボーナス
+
+export function battleScore(score: number, maxCombo: number, maxLevel: number, alive: boolean): number {
+  return Math.round(score + maxCombo * SC_COMBO + maxLevel * SC_LEVEL + (alive ? SC_SURVIVE : 0));
+}
 
 // Map a finishing place to a label.
 export function placeLabel(place: number): string {
