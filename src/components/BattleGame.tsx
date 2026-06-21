@@ -401,7 +401,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       if (h > ah2) { h = ah2; w = h * BOARD_ASPECT; }
       return { x: ax + (aw - w) / 2, y: ay + (ah2 - h) / 2, w, h };
     };
-    const weights = ids.map((id) => (id === selfId ? 2.2 : 0.85));
+    const weights = ids.map((id) => (id === selfId ? 3.2 : 0.6));
     const total = weights.reduce((a, b) => a + b, 0);
     const avail = cw - pad * 2 - gap * (ids.length - 1);
     let x = pad;
