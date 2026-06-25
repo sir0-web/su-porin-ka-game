@@ -724,7 +724,12 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
   // ═══════════════ RENDER ═══════════════
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#05050f', overflow: 'hidden', zIndex: 50 }}>
+    <div style={{
+      position: 'fixed', inset: 0, overflow: 'hidden', zIndex: 50,
+      background: isLandscape
+        ? 'url(/background-landscape.png) center/cover no-repeat, #05050f'
+        : 'url(/background.png) center/cover no-repeat, #05050f',
+    }}>
       <canvas ref={canvasRef} style={{ display: 'block', touchAction: 'none', position: 'absolute', inset: 0 }} />
 
       {/* Exit button (always) */}
