@@ -1210,12 +1210,20 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
     // Player name label (the editable input itself is an HTML overlay)
     ctx.save();
-    ctx.fillStyle = P.gold;
     ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 4; // legible over the image
-    ctx.fillText('プレイヤー名（ランキング表示用）', CX, NAME_LABEL_Y);
+    {
+      // dark backing pill so the label stays legible over busy/bright artwork
+      const label = 'プレイヤー名（ランキング表示用）';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      rrect(ctx, CX - tw / 2 - 10, NAME_LABEL_Y - 14, tw + 20, 19, 8);
+      ctx.fill();
+      ctx.fillStyle = P.gold;
+      ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
+      ctx.fillText(label, CX, NAME_LABEL_Y);
+    }
     ctx.restore();
 
     menuBtn(MENU_START_BTN, '⚔  ゲームスタート  ⚔', true);

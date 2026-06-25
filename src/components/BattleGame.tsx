@@ -700,8 +700,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      // Render at device resolution (capped) so boards stay smooth instead of
+      // blocky when the layout shrinks each player's board (e.g. 4-player).
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
     };
     resize();
     window.addEventListener('resize', resize);
