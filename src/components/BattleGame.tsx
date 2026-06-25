@@ -573,8 +573,6 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
       // render
       ctx.clearRect(0, 0, cw, ch);
-      ctx.fillStyle = '#05050f';
-      ctx.fillRect(0, 0, cw, ch);
 
       orderRef.current.forEach((id) => {
         const rect = rects.get(id);
