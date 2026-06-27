@@ -362,7 +362,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   // Play a sound effect. Prefers the pre-decoded Web Audio buffer (instant,
   // overlapping); falls back to a cloned HTMLAudio element.
-  const playSe = useCallback((src: string, volume: number, fallback: HTMLAudioElement | null) => {
+  const playSe = useCallback((src: string, volume: number, fallback: HTMLAudioElement | null, rate = 1) => {
     if (!seOnRef.current) return;
     const ctx = audioCtxRef.current;
     const buf = seBuffersRef.current.get(src);
@@ -371,6 +371,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       try {
         const node = ctx.createBufferSource();
         node.buffer = buf;
+        node.playbackRate.value = rate;
         const gain = ctx.createGain();
         gain.gain.value = volume;
         node.connect(gain).connect(ctx.destination);
@@ -381,11 +382,22 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     if (fallback) {
       try {
         const clone = fallback.cloneNode() as HTMLAudioElement;
-        clone.volume = volume;
+        clone.volume = Math.min(volume, 1);
+        clone.playbackRate = rate;
         clone.play().catch(() => {});
       } catch { /* */ }
     }
   }, []);
+
+  // Combo-scaled merge SE: the higher the combo, the richer the sound —
+  // louder, pitched up, and layered into an ascending sparkly cascade.
+  const playComboMerge = useCallback((combo: number) => {
+    const vol = Math.min(0.7 + (combo - 1) * 0.04, 1);
+    playSe('/se/gattai.wav', vol, seGattaiRef.current, 1 + (combo - 1) * 0.05);
+    if (combo >= 3) window.setTimeout(() => playSe('/se/gattai.wav', vol * 0.6, seGattaiRef.current, 1.33), 70);
+    if (combo >= 5) window.setTimeout(() => playSe('/se/gattai.wav', vol * 0.5, seGattaiRef.current, 1.5), 140);
+    if (combo >= 7) window.setTimeout(() => playSe('/se/gattai.wav', vol * 0.45, seGattaiRef.current, 2), 210);
+  }, [playSe]);
 
   // ── Play exactly the BGM that matches the current phase (TOP / playing /
   //    gameover), pausing the others. Safe to call any time; only plays when
@@ -1368,32 +1380,42 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         ctx.lineJoin = 'round';
         const bob = Math.sin(now * 0.0024 + i * 0.8) * 3; // playful bounce
         const yy = by + bob;
-        // 1. soft drop shadow for a sticker-like depth
+        // 1. outlines for definition against the bright background:
+        //    a coloured (deep) halo first, then a crisp white sticker edge.
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
-        ctx.lineWidth = 8; ctx.strokeStyle = '#ffffff'; // thick white sticker outline
+        ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 7; ctx.shadowOffsetY = 3;
+        ctx.lineWidth = 12; ctx.strokeStyle = c.deep;   // coloured halo
+        ctx.strokeText(red, x, yy);
+        ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+        ctx.lineWidth = 6; ctx.strokeStyle = '#ffffff'; // white sticker edge
         ctx.strokeText(red, x, yy);
         ctx.restore();
-        // 2. bright pastel fill + matching colour glow (gentle pulse)
+        // 2. saturated pastel fill (only a small top highlight so the colour
+        //    stays vivid instead of blowing out to white) + gentle glow.
         ctx.save();
         ctx.shadowColor = c.glow;
-        ctx.shadowBlur = 16 + 6 * (0.5 + 0.5 * Math.sin(now * 0.003 + i));
+        ctx.shadowBlur = 9 + 4 * (0.5 + 0.5 * Math.sin(now * 0.003 + i));
         const g = ctx.createLinearGradient(0, yy - 42, 0, yy + 6);
-        g.addColorStop(0,   '#ffffff');
-        g.addColorStop(0.45, c.fill);
+        g.addColorStop(0,    '#ffffff');
+        g.addColorStop(0.20, c.fill);
         g.addColorStop(1,    c.deep);
         ctx.fillStyle = g;
         ctx.fillText(red, x, yy);
         ctx.restore();
         x += ctx.measureText(red).width + 4;
         if (white) {
-          ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+          // bigger + higher-contrast white sub-text (black outline + shadow)
+          ctx.save();
+          ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
           ctx.lineJoin = 'round';
-          ctx.lineWidth = 3;
-          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-          ctx.fillStyle = '#ffffff';
+          ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)';
           ctx.strokeText(white, x, by - 9);
+          ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+          ctx.fillStyle = '#ffffff';
           ctx.fillText(white, x, by - 9);
+          ctx.restore();
         }
       });
       ctx.restore();
@@ -1769,11 +1791,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const gain = base * combo;
       gs.current.score += gain;
 
-      // Merge SE
+      // Merge SE — richer the bigger the combo
       if (level === MAX_LEVEL) {
         playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current);
       } else {
-        playSe('/se/gattai.wav', 0.7, seGattaiRef.current);
+        playComboMerge(combo);
       }
 
       // Light-orb burst at the merge point (colour = the new evolution)
@@ -1806,7 +1828,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
       }
     }, 80);
-  }, [spawnMonster, triggerSecretFx, playSe, spawnBurst]);
+  }, [spawnMonster, triggerSecretFx, playSe, playComboMerge, spawnBurst]);
 
   // ── Drop current monster ────────────────────────────────────
   const drop = useCallback(() => {
@@ -2278,7 +2300,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   }, [initGame, drop, saveScreenshot, unlockAudio, goToTop, onBattle]);
 
   return (
-    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden', marginTop: 28 }}>
+    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
       <div ref={wrapRef} style={{ position: 'relative', width: W, height: H }}>
         <canvas
           ref={canvasRef}
@@ -2373,8 +2395,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             style={{
               position: 'absolute',
               top: NAME_INPUT_TOP,
-              left: CX - 140,
-              width: 280,
+              left: MENU_START_BTN.x,
+              width: MENU_START_BTN.w,
               height: NAME_INPUT_H,
               // RPG-style: semi-transparent black bg (image faintly shows), white border/text
               background: 'rgba(0,0,0,0.5)',
@@ -2393,7 +2415,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             }}
           />
         )}
-        {modal !== null && (() => {
+      </div>
+      {/* Modals render OUTSIDE the scaled board wrapper so the dimmed
+          backdrop covers the whole viewport and the panel centres on screen
+          (mobile-safe; the board's transform: scale no longer clips it). */}
+      {modal !== null && (() => {
           const closeModal = () => {
             modalRef.current = null; setModal(null);
             // resume play if we auto-paused to show the in-game popup
@@ -2403,13 +2429,15 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             background: 'rgba(8,8,28,0.98)',
             border: '1.5px solid #c8a030',
             borderRadius: 12,
-            width: 360,
-            maxHeight: 580,
+            width: modal === 'confirmTop' ? 320 : 360,
+            maxWidth: '90vw',
+            maxHeight: '85vh',
             overflowY: 'auto',
             padding: '18px 22px 22px',
             boxSizing: 'border-box',
             color: '#f0e0b0',
             fontFamily: '"Noto Sans JP", sans-serif',
+            boxShadow: '0 14px 48px rgba(0,0,0,0.6)',
           };
           const h2Style: React.CSSProperties = {
             textAlign: 'center', color: '#c8a030', margin: '0 0 14px',
@@ -2442,10 +2470,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           return (
             <div
               style={{
-                position: 'absolute', top: 0, left: 0, width: W, height: H,
+                position: 'fixed', inset: 0,
                 background: 'rgba(4,4,20,0.88)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                zIndex: 10,
+                padding: 16, boxSizing: 'border-box',
+                zIndex: 50,
               }}
               onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
             >
@@ -2557,7 +2586,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             </div>
           );
         })()}
-      </div>
     </div>
   );
 }

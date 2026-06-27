@@ -146,19 +146,15 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   }, [phase, stopFall]);
 
   // ── Orientation detection ──
+  // 縦・横どちらでもプレイ可能。検出結果は背景画像の出し分けにのみ使う
+  // （横画面の強制は廃止）。
   useEffect(() => {
     const check = () => {
-      const land = window.innerWidth >= window.innerHeight;
-      setIsLandscape(land);
+      setIsLandscape(window.innerWidth >= window.innerHeight);
     };
     check();
     window.addEventListener('resize', check);
     window.addEventListener('orientationchange', check);
-    // best-effort lock (works only in fullscreen on some browsers)
-    try {
-      const so = (screen.orientation as unknown as { lock?: (o: string) => Promise<void> });
-      so?.lock?.('landscape').catch(() => {});
-    } catch { /* */ }
     return () => {
       window.removeEventListener('resize', check);
       window.removeEventListener('orientationchange', check);
@@ -492,20 +488,19 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     return () => clearInterval(iv);
   }, [phase]);
 
-  // ── Layout: self board large on the left, opponents stacked in a single
-  //    vertical column on the right (each opponent uses an equal share of the
-  //    full height). The self board is a portrait board, so it is bound by the
-  //    screen height — it fills the full height (its maximum) while the
-  //    opponents are compacted into a thin column so the self board dominates.
+  // ── Layout ─────────────────────────────────────────────────
+  //  縦画面: 自分の盤面を上に大きく、相手はその下に横一列で並べる。
+  //  横画面: 自分の盤面を左に大きく、相手は右に縦一列で並べる。
+  //  どちらも自分の盤面を最大化し、相手はコンパクトに収める。
   const computeRects = useCallback((cw: number, ch: number) => {
     const order = orderRef.current;
     const opp = order.filter((id) => id !== selfId);
     const rects = new Map<string, { x: number; y: number; w: number; h: number }>();
     const pad = 8, gap = 8, PLATE = 24;
-    // Extra headroom at the top so boards sit below the timer / exit controls
-    // (they were hugging the very top edge before).
-    const padTop = Math.round(Math.max(48, ch * 0.07));
+    // Extra headroom at the top so boards sit below the timer / exit controls.
+    const padTop = Math.round(Math.max(48, ch * 0.06));
     const availH = ch - padTop - pad;
+    const portrait = ch >= cw;
 
     // Largest board (w,h) fitting a box of (boxW, boxH) minus the score plate,
     // keeping the board aspect. Portrait boards are normally height-bound.
@@ -518,21 +513,47 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
     if (opp.length === 0) {
       const { w, h } = fitSize(cw - pad * 2, availH);
-      rects.set(selfId, { x: (cw - w) / 2, y: padTop, w, h });
+      rects.set(selfId, { x: (cw - w) / 2, y: padTop + (availH - PLATE - h) / 2, w, h });
       return rects;
     }
 
-    // Opponent column on the right: each opponent gets an equal slice of the
-    // full height (uses the vertical space to the max).
     const n = opp.length;
+
+    if (portrait) {
+      // 相手は下段に横一列。各相手は画面幅を均等割りした幅に収める。
+      // 相手段の高さは画面の約26%（最小値を確保）。
+      const oppRowH = Math.min(availH * 0.30, Math.max(120, availH * 0.24));
+      const oppCellW = (cw - pad * 2 - gap * (n - 1)) / n;
+      const oppSize = fitSize(oppCellW, oppRowH);
+
+      // 自分は上段の残り高さ全部を使う。
+      const selfBoxH = availH - oppRowH - gap;
+      const selfSize = fitSize(cw - pad * 2, selfBoxH);
+      rects.set(selfId, {
+        x: (cw - selfSize.w) / 2,
+        y: padTop + (selfBoxH - PLATE - selfSize.h) / 2,
+        w: selfSize.w, h: selfSize.h,
+      });
+
+      // 相手段を中央寄せで横並び。
+      const rowW = oppSize.w * n + gap * (n - 1);
+      const rowX0 = (cw - rowW) / 2;
+      const rowY0 = padTop + selfBoxH + gap;
+      opp.forEach((id, i) => {
+        rects.set(id, {
+          x: rowX0 + i * (oppSize.w + gap),
+          y: rowY0 + (oppRowH - PLATE - oppSize.h) / 2,
+          w: oppSize.w, h: oppSize.h,
+        });
+      });
+      return rects;
+    }
+
+    // 横画面: 相手は右側に縦一列。
     const cellH = (availH - gap * (n - 1)) / n;
     const oppSize = fitSize(cw, cellH);            // height-bound → narrow column
     const oppColW = oppSize.w;
 
-    // Self board at full height, taking the remaining width. The self board +
-    // opponent column are centered together so the pair sits balanced on
-    // screen (a lone portrait board can't fill a wide landscape, so the
-    // leftover width becomes symmetric side margins instead of one dead gap).
     const selfSize = fitSize(cw - pad * 2 - gap - oppColW, availH);
     const groupW = selfSize.w + gap + oppColW;
     const x0 = Math.max(pad, (cw - groupW) / 2);
@@ -993,19 +1014,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         </Overlay>
       )}
 
-      {/* Orientation gate */}
-      {!isLandscape && (
-        <Overlay>
-          <div style={{ textAlign: 'center', color: '#f0e0b0' }}>
-            <div style={{ fontSize: 64, marginBottom: 16 }}>📱↻</div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>横画面にしてください</div>
-            <div style={{ fontSize: 13, color: '#8a7a50' }}>対戦モードは横画面でプレイします</div>
-          </div>
-        </Overlay>
-      )}
-
       {/* Entry (orient phase = enter name) */}
-      {isLandscape && phase === 'orient' && (
+      {phase === 'orient' && (
         <Overlay>
           <Panel title="⚔ 対戦モード">
             <div style={{ fontSize: 12, color: '#8a7a50', marginBottom: 12, textAlign: 'center' }}>
@@ -1019,7 +1029,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       )}
 
       {/* Lobby */}
-      {isLandscape && phase === 'lobby' && (
+      {phase === 'lobby' && (
         <Overlay>
           <Panel title="⚔ 対戦ルーム" wide>
             <div style={{ fontSize: 11, color: '#8a7a50', textAlign: 'center', marginBottom: 10 }}>
