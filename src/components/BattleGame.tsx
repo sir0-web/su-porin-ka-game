@@ -72,6 +72,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const burstRef = useRef<Burst[]>([]);
   const rafRef = useRef(0);
   const lastSnapRef = useRef(0);
+  const physAccumRef = useRef(0);   // physics throttle accumulator
+  const prevDimRef = useRef({ cw: 0, ch: 0, order: '' }); // rect cache key
   const matchEndRef = useRef(0);      // wall-clock ms when the match ends
   const resultsDoneRef = useRef(false);
   const matchLeftRef = useRef(0);     // cached remaining seconds (avoid re-render spam)
@@ -587,39 +589,39 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     ctx.translate(rect.x, rect.y);
     ctx.scale(s, s);
 
-    // field background — gradient veil for depth
-    const veil = ctx.createLinearGradient(0, 0, 0, B_FLOOR_Y);
-    veil.addColorStop(0,   'rgba(12,12,40,0.80)');
-    veil.addColorStop(0.5, 'rgba(7,7,30,0.84)');
-    veil.addColorStop(1,   'rgba(4,4,18,0.90)');
-    ctx.fillStyle = veil;
-    ctx.fillRect(0, 0, BW, B_H);
-
-    // soft mystic glow falling from the danger line
-    const topG = ctx.createRadialGradient(BW / 2, B_CEILING_Y - 6, 6, BW / 2, B_CEILING_Y - 6, BW * 0.72);
-    topG.addColorStop(0, hexA('#6c78ff', 0.12));
-    topG.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = topG;
-    ctx.fillRect(0, 0, BW, B_FLOOR_Y);
-
-    // walls (subtle gradient bevel)
-    const wlg = ctx.createLinearGradient(0, 0, B_WALL, 0);
-    wlg.addColorStop(0, '#060618'); wlg.addColorStop(1, '#13133c');
-    ctx.fillStyle = wlg; ctx.fillRect(0, 0, B_WALL, B_H);
-    const wrg = ctx.createLinearGradient(B_GR, 0, B_GR + B_WALL, 0);
-    wrg.addColorStop(0, '#13133c'); wrg.addColorStop(1, '#060618');
-    ctx.fillStyle = wrg; ctx.fillRect(B_GR, 0, B_WALL, B_H);
-    const wfg = ctx.createLinearGradient(0, B_FLOOR_Y, 0, B_H);
-    wfg.addColorStop(0, '#13133c'); wfg.addColorStop(1, '#060618');
-    ctx.fillStyle = wfg; ctx.fillRect(0, B_FLOOR_Y, BW, B_H - B_FLOOR_Y);
-
-    // edge vignette (frames the field)
-    const vcy = (B_CEILING_Y + B_FLOOR_Y) / 2;
-    const vg = ctx.createRadialGradient(BW / 2, vcy, 30, BW / 2, vcy, BW * 0.78);
-    vg.addColorStop(0,    'rgba(0,0,0,0)');
-    vg.addColorStop(0.72, 'rgba(0,0,0,0)');
-    vg.addColorStop(1,    'rgba(0,0,0,0.40)');
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, BW, B_FLOOR_Y);
+    // Background — full gradients for self board, solid fills for opponents
+    if (isSelf) {
+      const veil = ctx.createLinearGradient(0, 0, 0, B_FLOOR_Y);
+      veil.addColorStop(0,   'rgba(12,12,40,0.80)');
+      veil.addColorStop(0.5, 'rgba(7,7,30,0.84)');
+      veil.addColorStop(1,   'rgba(4,4,18,0.90)');
+      ctx.fillStyle = veil;
+      ctx.fillRect(0, 0, BW, B_H);
+      const topG = ctx.createRadialGradient(BW / 2, B_CEILING_Y - 6, 6, BW / 2, B_CEILING_Y - 6, BW * 0.72);
+      topG.addColorStop(0, hexA('#6c78ff', 0.12));
+      topG.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = topG;
+      ctx.fillRect(0, 0, BW, B_FLOOR_Y);
+      const wlg = ctx.createLinearGradient(0, 0, B_WALL, 0);
+      wlg.addColorStop(0, '#060618'); wlg.addColorStop(1, '#13133c');
+      ctx.fillStyle = wlg; ctx.fillRect(0, 0, B_WALL, B_H);
+      const wrg = ctx.createLinearGradient(B_GR, 0, B_GR + B_WALL, 0);
+      wrg.addColorStop(0, '#13133c'); wrg.addColorStop(1, '#060618');
+      ctx.fillStyle = wrg; ctx.fillRect(B_GR, 0, B_WALL, B_H);
+      const wfg = ctx.createLinearGradient(0, B_FLOOR_Y, 0, B_H);
+      wfg.addColorStop(0, '#13133c'); wfg.addColorStop(1, '#060618');
+      ctx.fillStyle = wfg; ctx.fillRect(0, B_FLOOR_Y, BW, B_H - B_FLOOR_Y);
+      const vcy = (B_CEILING_Y + B_FLOOR_Y) / 2;
+      const vg = ctx.createRadialGradient(BW / 2, vcy, 30, BW / 2, vcy, BW * 0.78);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(0.72, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.40)');
+      ctx.fillStyle = vg; ctx.fillRect(0, 0, BW, B_FLOOR_Y);
+    } else {
+      ctx.fillStyle = '#08082a'; ctx.fillRect(0, 0, BW, B_H);
+      ctx.fillStyle = '#060618';
+      ctx.fillRect(0, 0, B_WALL, B_H);
+      ctx.fillRect(B_GR, 0, B_WALL, B_H);
+      ctx.fillRect(0, B_FLOOR_Y, BW, B_H - B_FLOOR_Y);
+    }
 
     // frame
     if (isSelf) {
@@ -641,11 +643,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       ctx.strokeRect(1, 1, BW - 2, B_H - 2);
     }
 
-    // danger line (glowing dashes)
+    // danger line
     ctx.save();
     ctx.strokeStyle = 'rgba(255,48,48,0.85)';
     ctx.lineWidth = 1.5;
-    ctx.shadowColor = 'rgba(255,40,40,0.6)'; ctx.shadowBlur = 6;
+    if (isSelf) { ctx.shadowColor = 'rgba(255,40,40,0.6)'; ctx.shadowBlur = 6; }
     ctx.setLineDash([7, 5]);
     ctx.beginPath(); ctx.moveTo(B_GL, B_CEILING_Y); ctx.lineTo(B_GR, B_CEILING_Y); ctx.stroke();
     ctx.restore();
@@ -655,17 +657,17 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     let cur = 0, next = 1, dropX = BW / 2, pending = 0, score = 0, dead = false;
     if (lb) {
       lb.forEachBody((level, x, y, angle, sq, merging) => {
-        if (level < 0) drawOre(ctx, x, y, 13, Math.round(x));
-        else drawMonster(ctx, x, y, level, procRef.current, { angle, squash: sq, alpha: merging ? 0.5 : 1 });
+        if (level < 0) drawOre(ctx, x, y, 13, Math.round(x), { lite: !isSelf });
+        else drawMonster(ctx, x, y, level, procRef.current, { angle, squash: sq, alpha: merging ? 0.5 : 1, lite: !isSelf });
       });
       cur = lb.currentLevel; next = lb.nextLevel; dropX = lb.dropX;
       pending = lb.pendingOre; score = lb.score; dead = lb.dead;
     } else {
       const sn = snapsRef.current.get(id);
       if (sn) {
-        for (let i = 0; i + 1 < sn.o.length; i += 2) drawOre(ctx, sn.o[i], sn.o[i + 1], 13, sn.o[i]);
+        for (let i = 0; i + 1 < sn.o.length; i += 2) drawOre(ctx, sn.o[i], sn.o[i + 1], 13, sn.o[i], { lite: true });
         for (let i = 0; i + 3 < sn.b.length; i += 4) {
-          drawMonster(ctx, sn.b[i + 1], sn.b[i + 2], sn.b[i], procRef.current, { angle: sn.b[i + 3] / 100 });
+          drawMonster(ctx, sn.b[i + 1], sn.b[i + 2], sn.b[i], procRef.current, { angle: sn.b[i + 3] / 100, lite: true });
         }
         cur = sn.cur; next = sn.next; dropX = sn.dropX; pending = sn.pending; score = sn.score; dead = sn.dead;
       }
@@ -771,13 +773,23 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       last = ts;
 
       const cw = canvas.width, ch = canvas.height;
-      const rects = computeRects(cw, ch);
-      rectsRef.current = rects;
+      // Recompute layout only when canvas size or player list changes
+      const orderKey = orderRef.current.join(',');
+      if (cw !== prevDimRef.current.cw || ch !== prevDimRef.current.ch || orderKey !== prevDimRef.current.order) {
+        rectsRef.current = computeRects(cw, ch);
+        prevDimRef.current = { cw, ch, order: orderKey };
+      }
+      const rects = rectsRef.current;
 
       if (phaseRef.current === 'playing') {
-        // CPU think + step my boards
-        if (isOwnerRef.current) cpusRef.current.forEach((c) => c.think());
-        boardsRef.current.forEach((b) => { b.step(dt); });
+        // Physics throttled to ~30 fps to reduce mobile CPU load
+        physAccumRef.current += dt;
+        if (physAccumRef.current >= 33) {
+          const stepDt = physAccumRef.current;
+          physAccumRef.current = 0;
+          if (isOwnerRef.current) cpusRef.current.forEach((c) => c.think());
+          boardsRef.current.forEach((b) => { b.step(stepDt); });
+        }
 
         // broadcast snapshots
         if (ts - lastSnapRef.current > SNAPSHOT_INTERVAL) {
@@ -945,7 +957,7 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     const resize = () => {
       // Render at device resolution (capped) so boards stay smooth instead of
       // blocky when the layout shrinks each player's board (e.g. 4-player).
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, window.innerWidth < 1024 ? 1 : 2);
       canvas.width = Math.round(window.innerWidth * dpr);
       canvas.height = Math.round(window.innerHeight * dpr);
     };
