@@ -636,7 +636,7 @@ export function AdminPanelMinimal() {
   if (!authed) return (
     <div style={S.page}>
       <div style={S.loginCard}>
-        <div style={S.loginTitle}>🏰 Endless Tower Admin</div>
+        <div style={S.loginTitle}>🍉 suiga admin</div>
         <input type="password" value={pw} autoFocus
           onChange={e => setPw(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && login()}
@@ -662,7 +662,7 @@ export function AdminPanelMinimal() {
   return (
     <div style={S.page}>
       <div style={S.header}>
-        <span style={{ fontWeight: 700 }}>🏰 Endless Tower Admin</span>
+        <span style={{ fontWeight: 700 }}>🍉 suiga admin</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
             onClick={() => setEnvMode(m => m === 'production' ? 'local' : 'production')}
