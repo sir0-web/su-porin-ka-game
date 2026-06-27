@@ -10,7 +10,7 @@ import {
 import { rrect, hexA, buildSprite, type Sprite } from '@/lib/sprites';
 
 // ─── Canvas dimensions ─────────────────────────────────────────
-const W = 488;                  // canvas matches the decorative frame (frame.png) 2:3 aspect
+const W = 560;
 const WALL = 14;
 const H = 732;
 
@@ -24,18 +24,19 @@ const zx = (x: number) => FZ_CX + (x - FZ_CX) * FRAME_ZOOM;
 const zy = (y: number) => FZ_CY + (y - FZ_CY) * FRAME_ZOOM;
 
 // Play field aligned to the (zoomed) frame.png opening so blocks sit inside the border.
-const CEILING_Y = Math.round(zy(145));   // danger line ≈ frame opening top
-const FLOOR_Y = Math.round(zy(608));     // floor ≈ frame opening bottom
-const BHUD_Y = FLOOR_Y + WALL;           // (legacy; unused with the frame skin)
-const DROP_Y = Math.round(zy(115));      // aim piece sits above the danger line (pushed down to reduce button overlap)
-const GL = Math.round(zx(83));           // frame opening left
-const GR = Math.round(zx(410));          // frame opening right
+const CEILING_Y = 133;   // frame2.png opening top (canvas px)
+const FLOOR_Y   = 597;   // frame2.png opening bottom (canvas px)
+const BHUD_Y = FLOOR_Y + WALL;
+const DROP_Y = 110;      // aim piece above danger line
+const GL = 41;           // frame2.png opening left
+const GR = 521;          // frame2.png opening right
 const GW = GR - GL;
 const CX = W / 2;
 const DROP_COOLDOWN = 550;
 
 // ── Decorative frame skin (overlaid during play) ───────────────
-const FRAME_SRC = '/frame.png';
+const FRAME_SRC  = '/frame.png';
+const FRAME2_SRC = '/frame2.png';
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
   nextX:  zx(0.250 * W), nextY: zy(0.140 * H), nextLabelY: zy(0.092 * H),
@@ -46,11 +47,11 @@ const FA = {
 // zx/zy at use). The icons are drawn ON the canvas and taps are hit-tested in
 // the canvas handler — HTML <button>s mis-scaled inside the transformed
 // wrapper on mobile (icons drifted outside their circles).
-const OPT_EGG   = { x: 331, y: 64 };
-const OPT_SND   = { x: 366, y: 64 };
-const OPT_PAUSE = { x: 402, y: 64 };
-const OPT_R = 17;                        // icon font / hit radius
-const OPT_SND_START = { x: W - 28, y: 30 }; // sound toggle on the TOP screen
+const OPT_EGG   = { x: 380, y: 64 };
+const OPT_SND   = { x: 422, y: 64 };
+const OPT_PAUSE = { x: 462, y: 64 };
+const OPT_R = 17;
+const OPT_SND_START = { x: W - 28, y: 30 };
 
 // ─── Palette ───────────────────────────────────────────────────
 const P = {
@@ -223,8 +224,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const pointerRef    = useRef<{ x: number; y: number }>({ x: -1, y: -1 });
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
-  const frameImgRef   = useRef<HTMLImageElement | null>(null); // decorative frame skin
-  const frameReadyRef = useRef<boolean>(false);
+  const frameImgRef    = useRef<HTMLImageElement | null>(null);
+  const frameReadyRef  = useRef<boolean>(false);
+  const frame2ImgRef   = useRef<HTMLImageElement | null>(null);
+  const frame2ReadyRef = useRef<boolean>(false);
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
   const rankingRef    = useRef<RankEntry[]>([]);
   const lastRankIdxRef = useRef<number>(-1);
@@ -279,12 +282,19 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');
 
-  // Load the decorative frame skin once.
+  // Load the decorative frame skins once.
   useEffect(() => {
     const img = new Image();
     img.onload = () => { frameReadyRef.current = true; };
     img.src = FRAME_SRC;
     frameImgRef.current = img;
+  }, []);
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => { frame2ReadyRef.current = true; };
+    img.src = FRAME2_SRC;
+    frame2ImgRef.current = img;
   }, []);
 
   // Load the saved player name once on mount; if none, generate a default
@@ -2156,9 +2166,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       // Render
       ctx.clearRect(0, 0, W, H);
-      const useFrame = frameReadyRef.current && frameImgRef.current;
-      drawBG(ctx);                 // veil/grid/motes inside the play field
-      if (!useFrame) { drawWalls(ctx); drawCeiling(ctx); } // procedural chrome (fallback)
+      const useFrame  = frameReadyRef.current  && frameImgRef.current;
+      const useFrame2 = frame2ReadyRef.current && frame2ImgRef.current;
+      // frame2: opaque base layer (golden background + borders + white inner area)
+      if (useFrame2) ctx.drawImage(frame2ImgRef.current as HTMLImageElement, 0, 0, W, H);
+      drawBG(ctx);                 // dark veil/grid inside play field (covers frame2's white centre)
+      if (!useFrame && !useFrame2) { drawWalls(ctx); drawCeiling(ctx); }
 
       // Pulse factor for the danger outline (visibility)
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.012);
@@ -2198,14 +2211,23 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       // Merge bursts (light orbs) over the monsters, beneath the HUD
       drawParticles(ctx, !isPausedRef.current);
 
-      if (useFrame) {
-        // decorative frame on top of the field (uniformly zoomed about centre),
-        // then live values in its plates
+      if (useFrame2) {
+        // frame2 border on top: clip out the inner play field so monsters show through
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, W, H);
+        ctx.rect(GL, CEILING_Y, GW, FLOOR_Y - CEILING_Y);
+        ctx.clip('evenodd');
+        ctx.drawImage(frame2ImgRef.current as HTMLImageElement, 0, 0, W, H);
+        ctx.restore();
+        drawCeiling(ctx);
+        drawLiveHUD(ctx, s);
+      } else if (useFrame) {
         ctx.drawImage(
           frameImgRef.current as HTMLImageElement,
           zx(0), zy(0), W * FRAME_ZOOM, H * FRAME_ZOOM,
         );
-        drawCeiling(ctx);  // danger line drawn over frame skin
+        drawCeiling(ctx);
         drawLiveHUD(ctx, s);
       } else {
         drawHUD(ctx, s);
@@ -2231,7 +2253,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       // Option icons painted on top of everything (so they're tappable even
       // over the pause/gameover overlays). Taps are handled in handleClick.
-      if (useFrame) {
+      if (useFrame || useFrame2) {
         const soundOn = bgmOnRef.current && seOnRef.current;
         if (s.phase === 'playing') {
           drawOptionIcon(ctx, OPT_EGG.x, OPT_EGG.y, '🥚', true);
