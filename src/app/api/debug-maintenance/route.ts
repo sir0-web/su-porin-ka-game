@@ -15,23 +15,24 @@ export async function GET(req: NextRequest) {
     db.from('suiga_system_config').select('value').eq('key', 'maintenance_message').single(),
   ])
 
-  const now = new Date()
-  const windows = (winData?.value ?? []) as { start: string; end: string }[]
+  const now = Date.now()
+  const windows = (winData?.value ?? []) as { from: number; to: number | null }[]
   const checks = windows.map(w => ({
-    start: w.start,
-    end: w.end,
-    startParsed: new Date(w.start).toISOString(),
-    endParsed: new Date(w.end).toISOString(),
-    active: now >= new Date(w.start) && now <= new Date(w.end),
+    from: w.from, to: w.to,
+    fromISO: new Date(w.from).toISOString(),
+    toISO: w.to ? new Date(w.to).toISOString() : null,
+    isOpen: now >= w.from && (w.to === null || now < w.to),
   }))
+  const isOpen = checks.some(c => c.isOpen)
 
   return NextResponse.json({
-    serverNow: now.toISOString(),
+    serverNow: new Date(now).toISOString(),
     winError: e1?.message ?? null,
     msgError: e2?.message ?? null,
     rawWindows: winData?.value,
     rawMessage: msgData?.value,
     checks,
-    anyActive: checks.some(c => c.active),
+    isOpen,
+    inMaintenance: !isOpen,
   })
 }

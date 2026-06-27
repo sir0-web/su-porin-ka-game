@@ -4,28 +4,25 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 // 常に最新のメンテ状態を返す（キャッシュ無効）
 export const dynamic = 'force-dynamic';
 
-interface MaintenanceWindow { start: string; end: string }
+interface MaintenanceWindow { from: number; to: number | null }
 interface MaintenanceMessage { heading?: string; lead?: string; note?: string }
 
 async function getMaintenanceState(): Promise<{ active: boolean; message: MaintenanceMessage }> {
   try {
     const db = getSupabaseAdmin();
-    if (!db) return { active: false, message: {} };
+    if (!db) return { active: true, message: {} };
     const [{ data: winData }, { data: msgData }] = await Promise.all([
       db.from('suiga_system_config').select('value').eq('key', 'maintenance_windows').single(),
-      db.from('suiga_system_config').select('value').eq('key', 'maintenance_message').single(),
+      db.from('suiga_system_config').select('value').eq('key', 'maintenance_message').maybeSingle(),
     ]);
     const windows = (winData?.value ?? []) as MaintenanceWindow[];
     const message = (msgData?.value ?? {}) as MaintenanceMessage;
-    const now = new Date();
-    const active = windows.some(w => {
-      const start = new Date(w.start);
-      const end = new Date(w.end);
-      return !isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end;
-    });
-    return { active, message };
+    const now = Date.now();
+    // ウィンドウが1件でも「現在オープン中」なら公開、それ以外はメンテ
+    const isOpen = windows.some(w => now >= w.from && (w.to === null || now < w.to));
+    return { active: !isOpen, message };
   } catch {
-    return { active: false, message: {} };
+    return { active: true, message: {} };
   }
 }
 
