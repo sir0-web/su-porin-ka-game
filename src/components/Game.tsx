@@ -46,9 +46,9 @@ const FA = {
 // zx/zy at use). The icons are drawn ON the canvas and taps are hit-tested in
 // the canvas handler — HTML <button>s mis-scaled inside the transformed
 // wrapper on mobile (icons drifted outside their circles).
-const OPT_EGG   = { x: 331, y: 70 };
-const OPT_SND   = { x: 366, y: 70 };
-const OPT_PAUSE = { x: 402, y: 70 };
+const OPT_EGG   = { x: 331, y: 64 };
+const OPT_SND   = { x: 366, y: 64 };
+const OPT_PAUSE = { x: 402, y: 64 };
 const OPT_R = 17;                        // icon font / hit radius
 const OPT_SND_START = { x: W - 28, y: 30 }; // sound toggle on the TOP screen
 
@@ -2398,12 +2398,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   return (
     <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
-      <div ref={wrapRef} style={{ position: 'relative', width: W, height: H }}>
+      <div ref={wrapRef} style={{ position: 'relative', width: W, height: H, flexShrink: 0 }}>
         <canvas
           ref={canvasRef}
           width={W}
           height={H}
-          style={{ display: 'block', width: W, height: H, cursor: 'crosshair', touchAction: 'none' }}
+          style={{ display: 'block', width: W, height: H, maxWidth: 'none', cursor: 'crosshair', touchAction: 'none' }}
           onClick={(e) => handleClick(e.clientX, e.clientY)}
           onTouchEnd={(e) => {
             e.preventDefault();
