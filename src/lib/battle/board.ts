@@ -34,6 +34,9 @@ export interface BoardCallbacks {
   // merge happened (for local FX): produced `level`
   onMerge?: (fx: MergeFx) => void;
   onDead?: () => void;
+  // a dropped block started falling / first landed (for the falling SE)
+  onDrop?: () => void;
+  onLand?: () => void;
 }
 
 export class LocalBoard {
@@ -47,6 +50,7 @@ export class LocalBoard {
   currentLevel: number;
   nextLevel: number;
   dropX = B_CX;
+  fallingId = -1;   // body id of the block currently falling (for onLand)
   canDrop = true;
   coolUntil = 0;
   pendingOre = 0;     // ore waiting to drop on next turn
@@ -84,6 +88,11 @@ export class LocalBoard {
         const b = pair.bodyB.parent ?? pair.bodyB;
         if (!a.isStatic) this.squash(a);
         if (!b.isStatic) this.squash(b);
+        // falling SE: the dropped block made its first contact → it landed
+        if (this.fallingId >= 0 && (a.id === this.fallingId || b.id === this.fallingId)) {
+          this.fallingId = -1;
+          this.cb.onLand?.();
+        }
         if (pair.bodyA.isStatic || pair.bodyB.isStatic) continue;
         if (a === b) continue;
         this.tryMerge(a, b);
@@ -215,6 +224,8 @@ export class LocalBoard {
     const clX = Math.max(B_GL + r + 2, Math.min(B_GR - r - 2, this.dropX));
     const body = this.spawnMonster(clX, B_DROP_Y, this.currentLevel);
     this.M.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.03);
+    this.fallingId = body.id;     // track until it first lands (falling SE)
+    this.cb.onDrop?.();
     this.currentLevel = this.nextLevel;
     this.nextLevel = getRandomStartLevel();
     this.canDrop = false;

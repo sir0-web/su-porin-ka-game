@@ -10,18 +10,28 @@ import {
 import { rrect, hexA, buildSprite, type Sprite } from '@/lib/sprites';
 
 // ─── Canvas dimensions ─────────────────────────────────────────
-const W = 400;
+const W = 488;                  // canvas matches the decorative frame (frame.png) 2:3 aspect
 const WALL = 14;
-const FLOOR_Y = 646;            // play-field floor (blocks rest here)
-const BHUD_Y = FLOOR_Y + WALL;  // top of the bottom HUD bar (660)
-const H = 732;                  // canvas height incl. the bottom HUD bar
-const CEILING_Y = 118;
-const DROP_Y = 68;
-const GL = WALL;
-const GR = W - WALL;
+const H = 732;
+// Play field aligned to the frame.png opening so blocks sit inside the border.
+const CEILING_Y = 145;          // danger line ≈ frame opening top
+const FLOOR_Y = 608;            // floor ≈ frame opening bottom (gem ornament erased)
+const BHUD_Y = FLOOR_Y + WALL;  // (legacy; unused with the frame skin)
+const DROP_Y = 96;              // aim piece sits above the danger line in the frame's top arch
+const GL = 83;                  // frame opening left
+const GR = 410;                 // frame opening right
 const GW = GR - GL;
 const CX = W / 2;
 const DROP_COOLDOWN = 550;
+
+// ── Decorative frame skin (overlaid during play) ───────────────
+const FRAME_SRC = '/frame.png';
+// HUD anchor points within the frame, as px in the W×H canvas.
+const FA = {
+  nextX:  0.250 * W, nextY: 0.140 * H, nextLabelY: 0.092 * H,
+  bestX:  0.262 * W, scoreX: 0.498 * W, evoX: 0.740 * W,
+  labelY: 0.852 * H, valueY: 0.892 * H,  // value sits centred in the plate
+};
 
 // ─── Palette ───────────────────────────────────────────────────
 const P = {
@@ -59,9 +69,17 @@ interface GS {
   gameOverFrames: number;
   overLineFrames: number; // safety-net timer: frames with a body over the line
   maxLevel: number;       // highest monster level reached this game
+  unknownCount: number;   // how many 知らない人 were created this game
 }
 
-interface RankEntry { name: string; score: number; maxLevel: number; }
+interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; }
+
+// Ranking label for an entry's max evolution. Players who reached 知らない人
+// get it revealed with the number of times they created it (e.g. 知らない人＋3).
+function rankEvoLabel(e: RankEntry): string {
+  if (e.maxLevel >= MAX_LEVEL) return e.unknown != null ? `知らない人＋${e.unknown}` : '知らない人';
+  return MONSTERS[e.maxLevel].name;
+}
 
 // Floating score / combo popup
 interface Popup { x: number; y: number; text: string; start: number; big: boolean; }
@@ -181,8 +199,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const rafRef        = useRef<number>(0);
   const scaleRef      = useRef<number>(1);
   const coolRef       = useRef<number>(0);
+  // Canvas-space pointer position (for TOP menu hover lighting). -1 = off-canvas.
+  const pointerRef    = useRef<{ x: number; y: number }>({ x: -1, y: -1 });
   const imgsRef       = useRef<Map<number, HTMLImageElement>>(new Map());
   const procRef       = useRef<Map<number, Sprite>>(new Map());
+  const frameImgRef   = useRef<HTMLImageElement | null>(null); // decorative frame skin
+  const frameReadyRef = useRef<boolean>(false);
   const secretFxRef   = useRef<{ start: number; sparkles: { x: number; y: number; r: number; tw: number }[] } | null>(null);
   const rankingRef    = useRef<RankEntry[]>([]);
   const lastRankIdxRef = useRef<number>(-1);
@@ -193,10 +215,13 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const comboRef      = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
   const snapshotRef   = useRef<HTMLCanvasElement | null>(null);
   const viewingRef    = useRef<boolean>(false); // gazing at the final board
-  const bgmRef              = useRef<HTMLAudioElement | null>(null);
+  const bgmRef              = useRef<HTMLAudioElement | null>(null); // TOP screen BGM
+  const bgmPlayRef          = useRef<HTMLAudioElement | null>(null); // solo play BGM
   const bgmGameoverRef      = useRef<HTMLAudioElement | null>(null);
   const seGattaiRef         = useRef<HTMLAudioElement | null>(null);
   const seShiranaihitoRef   = useRef<HTMLAudioElement | null>(null);
+  const seFallRef           = useRef<HTMLAudioElement | null>(null); // block-falling SE
+  const fallingIdRef        = useRef<number>(-1);                    // body id currently falling
   const bgmOnRef            = useRef(true);
   const seOnRef             = useRef(true);
   // Web Audio: pre-decoded SE buffers for instant, reliable, overlapping playback
@@ -205,8 +230,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   const [bgmOn, setBgmOn]   = useState(true);
   const [seOn,  setSeOn]    = useState(true);
-  const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto'>(null);
-  const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto'>(null);
+  const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto' | 'confirmTop'>(null);
+  const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto' | 'confirmTop'>(null);
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
   const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
@@ -224,9 +249,18 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     gameOverFrames: 0,
     overLineFrames: 0,
     maxLevel: 0,
+    unknownCount: 0,
   });
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');
+
+  // Load the decorative frame skin once.
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => { frameReadyRef.current = true; };
+    img.src = FRAME_SRC;
+    frameImgRef.current = img;
+  }, []);
 
   // Load the saved player name once on mount; if none, generate a default
   // 「知らない人XXXX」 (random alphanumeric) and persist it.
@@ -256,6 +290,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     bgm.loop = true;
     bgm.volume = 0.4;
     bgmRef.current = bgm;
+    const bgmPlay = new Audio('/bgm/single.mp3'); // solo gameplay BGM
+    bgmPlay.loop = true;
+    bgmPlay.volume = 0.4;
+    bgmPlayRef.current = bgmPlay;
     const bgmGO = new Audio('/bgm/gameover.mp3');
     bgmGO.loop = false;
     bgmGO.volume = 0.5;
@@ -267,6 +305,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const seS = new Audio('/se/shiranaihito.wav');
     seS.volume = 0.8;
     seShiranaihitoRef.current = seS;
+    const seFall = new Audio('/se/fall.mp3'); // plays while a block is falling
+    seFall.volume = 0.5;
+    seFallRef.current = seFall;
 
     // Web Audio: create the context and pre-decode every SE into a buffer
     // so playback is instant, overlappable and never fails mid-game.
@@ -291,6 +332,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
     return () => {
       bgm.pause();
+      bgmPlay.pause();
+      bgmGO.pause();
+      seFall.pause();
       audioCtxRef.current?.close().catch(() => {});
     };
   }, []);
@@ -300,6 +344,20 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const unlockAudio = useCallback(() => {
     const ctx = audioCtxRef.current;
     if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }, []);
+
+  // Falling SE: start when a block is dropped, cut the moment it lands.
+  const playFall = useCallback(() => {
+    if (!seOnRef.current) return;
+    const f = seFallRef.current;
+    if (!f) return;
+    try { f.currentTime = 0; f.play().catch(() => {}); } catch { /* */ }
+  }, []);
+  const stopFall = useCallback(() => {
+    const f = seFallRef.current;
+    if (!f) return;
+    try { f.pause(); f.currentTime = 0; } catch { /* */ }
+    fallingIdRef.current = -1;
   }, []);
 
   // Play a sound effect. Prefers the pre-decoded Web Audio buffer (instant,
@@ -329,21 +387,42 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
   }, []);
 
-  useEffect(() => {
-    bgmOnRef.current = bgmOn;
-    const bgm = bgmRef.current;
-    if (!bgm) return;
-    if (!bgmOn) {
-      bgm.pause();
-      bgmGameoverRef.current?.pause();
-    } else {
-      const phase = gs.current.phase;
-      if (phase === 'start' || phase === 'playing') bgm.play().catch(() => {});
-      else if (phase === 'gameover') bgmGameoverRef.current?.play().catch(() => {});
+  // ── Play exactly the BGM that matches the current phase (TOP / playing /
+  //    gameover), pausing the others. Safe to call any time; only plays when
+  //    BGM is on and the game isn't paused. ──────────────────────────────
+  const syncBgm = useCallback(() => {
+    const top = bgmRef.current, play = bgmPlayRef.current, go = bgmGameoverRef.current;
+    const phase = gs.current.phase;
+    let target: HTMLAudioElement | null = null;
+    if (bgmOnRef.current && !isPausedRef.current) {
+      target = phase === 'gameover' ? go : phase === 'playing' ? play : top;
     }
-  }, [bgmOn]);
+    [top, play, go].forEach((a) => { if (a && a !== target && !a.paused) a.pause(); });
+    if (target && target.paused) target.play().catch(() => {});
+  }, []);
+
+  useEffect(() => { bgmOnRef.current = bgmOn; syncBgm(); }, [bgmOn, syncBgm]);
 
   useEffect(() => { seOnRef.current = seOn; }, [seOn]);
+
+  // ── Audio recovery: browsers block audio until a user gesture, and a
+  //    play() rejected before the first interaction never retries on its own.
+  //    Any pointer/key interaction anywhere resumes the Web Audio context and
+  //    (re)starts the phase-appropriate BGM, so audio reliably kicks in on the
+  //    user's first click instead of needing a manual sound ON/OFF toggle. ──
+  useEffect(() => {
+    const recover = () => {
+      const ctx = audioCtxRef.current;
+      if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+      syncBgm();
+    };
+    document.addEventListener('pointerdown', recover, true);
+    document.addEventListener('keydown', recover, true);
+    return () => {
+      document.removeEventListener('pointerdown', recover, true);
+      document.removeEventListener('keydown', recover, true);
+    };
+  }, [syncBgm]);
 
   // ── Diamond ornament ────────────────────────────────────────
   const diamond = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, s: number) => {
@@ -470,18 +549,67 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // The background image is rendered full-screen by the page. The canvas
     // stays transparent outside the play field so that image shows through
     // there. Inside the play field we lay a dark veil over it so the blocks
-    // stay readable (same look as before).
-    ctx.fillStyle = 'rgba(7,7,30,0.66)';
-    ctx.fillRect(GL, 0, GW, FLOOR_Y);
+    // stay readable — now with depth: vertical gradient, edge vignette, a
+    // soft top light source, a faint grid and slow-drifting light motes.
+    const now = Date.now();
+    // Veil only inside the play opening (CEILING_Y..FLOOR_Y); the area above
+    // (the frame's top arch) stays clear so the background art shows there.
+    const top0 = CEILING_Y, bot0 = FLOOR_Y, fh = bot0 - top0;
 
-    ctx.strokeStyle = 'rgba(30,30,90,0.18)';
+    // 1. Veil — vertical gradient (lighter at the top, deeper at the floor)
+    const veil = ctx.createLinearGradient(0, top0, 0, bot0);
+    veil.addColorStop(0,   'rgba(10,10,38,0.58)');
+    veil.addColorStop(0.5, 'rgba(7,7,30,0.66)');
+    veil.addColorStop(1,   'rgba(4,4,20,0.74)');
+    ctx.fillStyle = veil;
+    ctx.fillRect(GL, top0, GW, fh);
+
+    // 2. Soft top light source (mystic glow at the danger line)
+    const top = ctx.createRadialGradient(CX, top0, 8, CX, top0, GW * 0.7);
+    top.addColorStop(0, hexA('#6c78ff', 0.12));
+    top.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = top;
+    ctx.fillRect(GL, top0, GW, fh);
+
+    // 3. Faint grid
+    ctx.save();
+    ctx.beginPath(); ctx.rect(GL, top0, GW, fh); ctx.clip();
+    ctx.strokeStyle = 'rgba(40,40,110,0.14)';
     ctx.lineWidth = 1;
-    for (let x = GL; x <= GR; x += 40) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, FLOOR_Y); ctx.stroke();
+    for (let x = GL; x <= GR; x += 40) { ctx.beginPath(); ctx.moveTo(x, top0); ctx.lineTo(x, bot0); ctx.stroke(); }
+    for (let y = top0; y <= bot0; y += 40) { ctx.beginPath(); ctx.moveTo(GL, y); ctx.lineTo(GR, y); ctx.stroke(); }
+    ctx.restore();
+
+    // 4. Slow-drifting light motes (ambient depth, very subtle)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const N = 16;
+    for (let i = 0; i < N; i++) {
+      const fx    = 0.5 + 0.5 * Math.sin(i * 12.9898);
+      const speed = 8000 + (i % 5) * 2200;
+      const phase = ((now / speed) + fx) % 1;
+      const x = GL + 12 + fx * (GW - 24) + Math.sin(now / 2200 + i) * 9;
+      const y = bot0 - phase * (fh - 6);
+      const tw = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(now * 0.0028 + i * 1.7));
+      const r  = (1.1 + (i % 3) * 0.7) * tw;
+      const a  = 0.16 * tw * Math.sin(phase * Math.PI);
+      if (a <= 0) continue;
+      const tint = i % 3 === 0 ? '#c8a0ff' : '#9fb0ff';
+      ctx.shadowColor = hexA(tint, a);
+      ctx.shadowBlur  = r * 3;
+      ctx.fillStyle   = hexA(tint, a);
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     }
-    for (let y = 0; y <= FLOOR_Y; y += 40) {
-      ctx.beginPath(); ctx.moveTo(GL, y); ctx.lineTo(GR, y); ctx.stroke();
-    }
+    ctx.restore();
+
+    // 5. Edge vignette (darkens the corners of the opening)
+    const cy = (top0 + bot0) / 2;
+    const vg = ctx.createRadialGradient(CX, cy, 40, CX, cy, GW * 0.82);
+    vg.addColorStop(0,    'rgba(0,0,0,0)');
+    vg.addColorStop(0.72, 'rgba(0,0,0,0)');
+    vg.addColorStop(1,    'rgba(0,0,0,0.42)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(GL, top0, GW, fh);
   }, []);
 
   // ── Walls ───────────────────────────────────────────────────
@@ -571,18 +699,27 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.fillRect(GL, 0, GW, CEILING_Y);
 
     ctx.save();
-    ctx.strokeStyle = P.danger;
-    ctx.lineWidth = 1.5;
-    ctx.globalAlpha = 0.75;
+    // glow layer
+    ctx.strokeStyle = 'rgba(255,60,60,0.35)';
+    ctx.lineWidth = 6;
+    ctx.globalAlpha = 1;
     ctx.setLineDash([7, 5]);
+    ctx.beginPath(); ctx.moveTo(GL, CEILING_Y); ctx.lineTo(GR, CEILING_Y); ctx.stroke();
+    // solid line on top
+    ctx.strokeStyle = P.danger;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = 0.95;
     ctx.beginPath(); ctx.moveTo(GL, CEILING_Y); ctx.lineTo(GR, CEILING_Y); ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.font = 'bold 9px "Noto Sans JP", sans-serif';
+    ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
     ctx.fillStyle = P.danger;
-    ctx.textAlign = 'right';
+    ctx.globalAlpha = 0.95;
+    ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    ctx.fillText('DANGER LINE', GR - 4, CEILING_Y - 3);
+    ctx.shadowColor = 'rgba(255,0,0,0.7)';
+    ctx.shadowBlur = 6;
+    ctx.fillText('⚠ DANGER LINE', GL + 28, CEILING_Y - 4);
     ctx.restore();
   }, []);
 
@@ -592,13 +729,29 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const MG = 8;
     const py = MG, ph = (CEILING_Y - WALL) - py - MG; // even gap top & above the top band
 
+    // Glassy panel: base fill + vertical depth gradient + top sheen +
+    // border + gold top accent. Reused for the NEXT box and the score bar.
+    const glassPanel = (x: number, y: number, w: number, h: number, r: number) => {
+      ctx.fillStyle = P.panel;
+      rrect(ctx, x, y, w, h, r); ctx.fill();
+      ctx.save();
+      rrect(ctx, x, y, w, h, r); ctx.clip();
+      const g = ctx.createLinearGradient(0, y, 0, y + h);
+      g.addColorStop(0,   'rgba(70,64,140,0.24)');
+      g.addColorStop(0.5, 'rgba(0,0,0,0)');
+      g.addColorStop(1,   'rgba(0,0,0,0.30)');
+      ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'; // top sheen
+      ctx.fillRect(x, y + 3, w, 6);
+      ctx.restore();
+      ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
+      rrect(ctx, x, y, w, h, r); ctx.stroke();
+      ctx.fillStyle = P.gold; rrect(ctx, x, y, w, 3, 3); ctx.fill();
+    };
+
     // ── Top-left: NEXT panel (even margin from the frame) ──
     const nw = 84, nx = MG;
-    ctx.fillStyle = P.panel;
-    rrect(ctx, nx, py, nw, ph, 5); ctx.fill();
-    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, nx, py, nw, ph, 5); ctx.stroke();
-    ctx.fillStyle = P.gold; rrect(ctx, nx, py, nw, 3, 3); ctx.fill();
+    glassPanel(nx, py, nw, ph, 5);
 
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillStyle = P.gold;
@@ -608,10 +761,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const nm  = MONSTERS[st.nextLevel];
     const nmr = Math.min(nm.radius, 28);
     const sc  = nmr / nm.radius;
+    const bob = Math.sin(Date.now() * 0.003) * 2.2; // gentle float
     ctx.save();
-    ctx.translate(nx + nw / 2, py + ph / 2 + 8);
+    ctx.translate(nx + nw / 2, py + ph / 2 + 8 + bob);
     ctx.scale(sc, sc);
-    drawMonster(ctx, 0, 0, st.nextLevel, 0.85);
+    drawMonster(ctx, 0, 0, st.nextLevel, 0.9);
     ctx.restore();
 
     // Name with a dark backing pill for legibility
@@ -634,15 +788,26 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     if (st.phase === 'playing') {
       drawMonster(ctx, st.dropX, DROP_Y, st.currentLevel);
       if (st.canDrop) {
+        const r = MONSTERS[st.currentLevel].radius;
+        const now = Date.now();
         ctx.save();
-        ctx.strokeStyle = 'rgba(180,180,255,0.25)';
-        ctx.lineWidth = 1;
+        // flowing dashed guide
+        ctx.strokeStyle = 'rgba(180,190,255,0.32)';
+        ctx.lineWidth = 1.5;
         ctx.setLineDash([5, 7]);
+        ctx.lineDashOffset = -(now * 0.02) % 12;
         ctx.beginPath();
-        ctx.moveTo(st.dropX, DROP_Y + MONSTERS[st.currentLevel].radius + 2);
+        ctx.moveTo(st.dropX, DROP_Y + r + 2);
         ctx.lineTo(st.dropX, FLOOR_Y);
         ctx.stroke();
         ctx.setLineDash([]);
+        // pulsing landing marker on the floor
+        const pulse = 0.5 + 0.5 * Math.sin(now * 0.006);
+        ctx.strokeStyle = `rgba(200,210,255,${0.22 + 0.30 * pulse})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(st.dropX, FLOOR_Y - 4, r * 0.55, 5, 0, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.restore();
       }
     }
@@ -650,11 +815,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // ── Bottom HUD bar: BEST | SCORE | 最大進化 (even margin from frame) ──
     const bX = MG, bW = W - 2 * MG;
     const bY = BHUD_Y + MG, bH = H - bY - MG;
-    ctx.fillStyle = P.panel;
-    rrect(ctx, bX, bY, bW, bH, 6); ctx.fill();
-    ctx.strokeStyle = P.panelBrd; ctx.lineWidth = 1;
-    rrect(ctx, bX, bY, bW, bH, 6); ctx.stroke();
-    ctx.fillStyle = P.gold; rrect(ctx, bX, bY, bW, 3, 3); ctx.fill();
+    glassPanel(bX, bY, bW, bH, 6);
 
     // three cells: BEST (left) | SCORE (centre) | 最大進化 (right)
     const w1 = bW * 0.27, w2 = bW * 0.36, w3 = bW - w1 - w2;
@@ -687,7 +848,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.fillStyle = P.text;
     const scoreStr = String(st.score);
     ctx.font = `bold ${scoreStr.length > 6 ? 28 : 34}px "Oswald", "Arial Narrow", sans-serif`;
-    ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 8;
+    ctx.shadowColor = P.goldBrt;
+    ctx.shadowBlur = 7 + 4 * (0.5 + 0.5 * Math.sin(Date.now() * 0.005)); // gentle pulse
     ctx.fillText(scoreStr, x2 + w2 / 2, valY);
     ctx.shadowBlur = 0;
 
@@ -705,6 +867,86 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       efs -= 1; ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
     }
     drawNameText(ctx, evShort, x3 + w3 / 2, valY, st.maxLevel, efs);
+  }, [drawMonster, drawNameText]);
+
+  // ── Live HUD drawn ON TOP of the decorative frame skin ──────
+  //    (the frame.png provides the panels/labels-less plates; we paint the
+  //    live values into them, plus the NEXT monster and the aim piece.)
+  const drawLiveHUD = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
+    // NEXT monster (top-left plate)
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = P.gold;
+    ctx.font = 'bold 10px "Noto Sans JP", sans-serif';
+    ctx.fillText('NEXT', FA.nextX, FA.nextLabelY);
+    const nm = MONSTERS[st.nextLevel];
+    const nmr = Math.min(nm.radius, 24) * 0.8;
+    const scn = nmr / nm.radius;
+    ctx.translate(FA.nextX, FA.nextY);
+    ctx.scale(scn, scn);
+    drawMonster(ctx, 0, 0, st.nextLevel, 0.95);
+    ctx.restore();
+
+    // Bottom plates: BEST | SCORE | 最大進化
+    ctx.save();
+    ctx.textAlign = 'center';
+    const label = (x: number, text: string) => {
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = P.gold;
+      ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+      ctx.fillText(text, x, FA.labelY);
+    };
+    label(FA.bestX, 'BEST');
+    label(FA.scoreX, 'SCORE');
+    label(FA.evoX, '最大進化');
+
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = P.textDim;
+    ctx.font = 'bold 22px "Oswald", "Arial Narrow", sans-serif';
+    ctx.fillText(String(st.highScore), FA.bestX, FA.valueY);
+
+    ctx.fillStyle = P.text;
+    const ss = String(st.score);
+    ctx.font = `bold ${ss.length > 6 ? 24 : 30}px "Oswald", "Arial Narrow", sans-serif`;
+    ctx.shadowColor = P.goldBrt;
+    ctx.shadowBlur = 7 + 4 * (0.5 + 0.5 * Math.sin(Date.now() * 0.005));
+    ctx.fillText(ss, FA.scoreX, FA.valueY);
+    ctx.shadowBlur = 0;
+
+    const ev = evoName(st.maxLevel);
+    const evShort = ev.length > 7 ? ev.slice(0, 7) : ev;
+    let efs = 16;
+    ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
+    while (ctx.measureText(evShort).width > 0.21 * W && efs > 10) {
+      efs -= 1; ctx.font = `bold ${efs}px "Noto Sans JP", sans-serif`;
+    }
+    drawNameText(ctx, evShort, FA.evoX, FA.valueY, st.maxLevel, efs);
+    ctx.restore();
+
+    // Aim piece drawn LAST so it appears above the frame, NEXT panel and all HUD
+    if (st.phase === 'playing') {
+      drawMonster(ctx, st.dropX, DROP_Y, st.currentLevel);
+      if (st.canDrop) {
+        const r = MONSTERS[st.currentLevel].radius;
+        const now = Date.now();
+        ctx.save();
+        ctx.strokeStyle = 'rgba(180,190,255,0.32)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 7]);
+        ctx.lineDashOffset = -(now * 0.02) % 12;
+        ctx.beginPath();
+        ctx.moveTo(st.dropX, DROP_Y + r + 2);
+        ctx.lineTo(st.dropX, FLOOR_Y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const pulse = 0.5 + 0.5 * Math.sin(now * 0.006);
+        ctx.strokeStyle = `rgba(200,210,255,${0.22 + 0.30 * pulse})`;
+        ctx.beginPath();
+        ctx.ellipse(st.dropX, FLOOR_Y - 4, r * 0.55, 5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
   }, [drawMonster, drawNameText]);
 
   // 4-pointed sparkle star path
@@ -1083,10 +1325,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       ctx.font = 'bold 14px "Oswald", "Arial Narrow", sans-serif';
       ctx.fillText(String(e.score), x + w - 92, cy);
 
-      ctx.fillStyle = P.textDim;
+      ctx.fillStyle = e.maxLevel >= MAX_LEVEL ? '#d0b0ff' : P.textDim;
       ctx.font = '9px "Noto Sans JP", sans-serif';
-      const ev = evoName(e.maxLevel);
-      ctx.fillText(ev.length > 7 ? ev.slice(0, 7) : ev, x + w - 6, cy);
+      const ev = rankEvoLabel(e);
+      const shown = e.maxLevel >= MAX_LEVEL ? ev : (ev.length > 7 ? ev.slice(0, 7) : ev);
+      ctx.fillText(shown, x + w - 6, cy);
     });
   }, []);
 
@@ -1103,35 +1346,52 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         ['ガ', 'ったいさせたら最後に知らない人がでてきて唖然とした'],
         ['ゲーム', ''],
       ];
-      const x0 = 30, lh = 52, baseY = 100; // moved down, clear of the sound button
+      // Pop, bright pastel palette (blue / green / red·pink / warm), cycled
+      // per line so the title reads cheerful instead of dark & mystic.
+      const pops = [
+        { fill: '#8fd3ff', deep: '#2f9be8', glow: '#7ec8ff' }, // blue
+        { fill: '#a6f0a0', deep: '#3fc24f', glow: '#8fe890' }, // green
+        { fill: '#ffb3c2', deep: '#ff5d7a', glow: '#ff8fa3' }, // red / pink
+        { fill: '#ffe79a', deep: '#ffb43a', glow: '#ffd166' }, // warm yellow
+      ];
+      const popFont = '900 48px "Hiragino Maru Gothic ProN", "Rounded Mplus 1c", "Noto Sans JP", system-ui, sans-serif';
+      const x0 = 30, lh = 54, baseY = 102;
+      const now = Date.now();
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       lines.forEach(([red, white], i) => {
         const by = baseY + i * lh;
+        const c = pops[i % pops.length];
         let x = x0;
-        ctx.font = 'bold 44px "Noto Serif JP", "Yu Mincho", serif';
+        ctx.font = popFont;
         ctx.lineJoin = 'round';
-        ctx.lineWidth = 5;
-        // dark purple outline + purple glow for visibility over the image
-        ctx.strokeStyle = 'rgba(24,0,44,0.92)';
-        ctx.shadowColor = 'rgba(160,60,255,0.95)';
-        ctx.shadowBlur = 20;
-        // purple gradient fill (matches the background art)
-        const rg = ctx.createLinearGradient(0, by - 42, 0, by + 8);
-        rg.addColorStop(0,   '#f3d2ff');
-        rg.addColorStop(0.5, '#c060ff');
-        rg.addColorStop(1,   '#7a1fd0');
-        ctx.strokeText(red, x, by);
-        ctx.fillStyle = rg;
-        ctx.fillText(red, x, by);
-        x += ctx.measureText(red).width + 3;
-        ctx.shadowBlur = 0;
+        const bob = Math.sin(now * 0.0024 + i * 0.8) * 3; // playful bounce
+        const yy = by + bob;
+        // 1. soft drop shadow for a sticker-like depth
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 3;
+        ctx.lineWidth = 8; ctx.strokeStyle = '#ffffff'; // thick white sticker outline
+        ctx.strokeText(red, x, yy);
+        ctx.restore();
+        // 2. bright pastel fill + matching colour glow (gentle pulse)
+        ctx.save();
+        ctx.shadowColor = c.glow;
+        ctx.shadowBlur = 16 + 6 * (0.5 + 0.5 * Math.sin(now * 0.003 + i));
+        const g = ctx.createLinearGradient(0, yy - 42, 0, yy + 6);
+        g.addColorStop(0,   '#ffffff');
+        g.addColorStop(0.45, c.fill);
+        g.addColorStop(1,    c.deep);
+        ctx.fillStyle = g;
+        ctx.fillText(red, x, yy);
+        ctx.restore();
+        x += ctx.measureText(red).width + 4;
         if (white) {
           ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-          ctx.fillStyle = '#f4f4ff';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillStyle = '#ffffff';
           ctx.strokeText(white, x, by - 9);
           ctx.fillText(white, x, by - 9);
         }
@@ -1180,27 +1440,43 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     drawRule(TITLE_DIV_Y, true);  // rich rule between title and the menu
     drawRule(NAME_DIV_Y, false);  // rule below the player-name input
 
+    // Pointer-hover test (canvas-space) for mouse-over button lighting
+    const pt = pointerRef.current;
+    const isHover = (b: { x: number; y: number; w: number; h: number }) =>
+      pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h;
+
     // Menu button helper
     const menuBtn = (
       b: { x: number; y: number; w: number; h: number },
       label: string,
       primary: boolean,
     ) => {
+      const hover = isHover(b);
       const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
       if (primary) {
-        // gold, lightly translucent so the bg shows faintly
-        g.addColorStop(0, 'rgba(58,42,0,0.82)'); g.addColorStop(0.5, 'rgba(200,160,48,0.82)'); g.addColorStop(1, 'rgba(58,42,0,0.82)');
+        // gold, lightly translucent so the bg shows faintly (brighter on hover)
+        const edge = hover ? 0.92 : 0.82;
+        const mid  = hover ? 'rgba(232,188,72,0.94)' : 'rgba(200,160,48,0.82)';
+        g.addColorStop(0, `rgba(58,42,0,${edge})`); g.addColorStop(0.5, mid); g.addColorStop(1, `rgba(58,42,0,${edge})`);
       } else {
-        // dark, more translucent
-        g.addColorStop(0, 'rgba(10,10,36,0.5)'); g.addColorStop(0.5, 'rgba(22,22,60,0.5)'); g.addColorStop(1, 'rgba(10,10,36,0.5)');
+        // dark, more translucent (lifts on hover)
+        const edge = hover ? 0.72 : 0.5;
+        const mid  = hover ? 'rgba(44,44,98,0.78)' : 'rgba(22,22,60,0.5)';
+        g.addColorStop(0, `rgba(10,10,36,${edge})`); g.addColorStop(0.5, mid); g.addColorStop(1, `rgba(10,10,36,${edge})`);
       }
       ctx.fillStyle = g;
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.fill();
-      ctx.strokeStyle = primary ? P.goldBrt : P.gold;
+      // glossy top sheen
+      ctx.save();
+      rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.clip();
+      ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      ctx.fillRect(b.x, b.y + 2, b.w, b.h * 0.42);
+      ctx.restore();
+      ctx.strokeStyle = (primary || hover) ? P.goldBrt : P.gold;
       ctx.lineWidth = primary ? 2 : 1.5;
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.stroke();
-      if (primary) { ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 14; }
-      ctx.fillStyle = primary ? '#fffadc' : P.text;
+      if (primary || hover) { ctx.shadowColor = P.goldBrt; ctx.shadowBlur = hover ? 18 : 14; }
+      ctx.fillStyle = primary ? '#fffadc' : (hover ? '#fff4d6' : P.text);
       ctx.font = `bold ${primary ? 20 : 17}px "Noto Sans JP", sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -1231,14 +1507,22 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // 対戦モード — distinct purple gradient so it stands out
     {
       const b = MENU_BATTLE_BTN;
+      const hover = isHover(b);
       const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
-      g.addColorStop(0, 'rgba(26,0,48,0.86)'); g.addColorStop(0.5, 'rgba(122,31,208,0.86)'); g.addColorStop(1, 'rgba(26,0,48,0.86)');
+      const edge = hover ? 0.92 : 0.86;
+      const mid  = hover ? 'rgba(150,52,238,0.94)' : 'rgba(122,31,208,0.86)';
+      g.addColorStop(0, `rgba(26,0,48,${edge})`); g.addColorStop(0.5, mid); g.addColorStop(1, `rgba(26,0,48,${edge})`);
       ctx.fillStyle = g;
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.fill();
-      ctx.strokeStyle = '#c060ff'; ctx.lineWidth = 2;
+      ctx.save();
+      rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.clip();
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(b.x, b.y + 2, b.w, b.h * 0.42);
+      ctx.restore();
+      ctx.strokeStyle = hover ? '#e0a0ff' : '#c060ff'; ctx.lineWidth = 2;
       rrect(ctx, b.x, b.y, b.w, b.h, 10); ctx.stroke();
-      ctx.shadowColor = '#a040ff'; ctx.shadowBlur = 14;
-      ctx.fillStyle = '#f3d2ff';
+      ctx.shadowColor = '#a040ff'; ctx.shadowBlur = hover ? 20 : 14;
+      ctx.fillStyle = hover ? '#fbeaff' : '#f3d2ff';
       ctx.font = 'bold 19px "Noto Sans JP", sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('🆚  対戦モード（最大4人）', b.x + b.w / 2, b.y + b.h / 2);
@@ -1289,10 +1573,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.font = isNew ? 'bold 11px "Noto Sans JP"' : '10px "Noto Sans JP"';
     ctx.fillText(isNew ? '🎉  NEW RECORD!  🎉' : `ベスト: ${st.highScore}`, CX, by + 118);
 
-    // Max evolution reached (secret masked) — uses the real maxLevel
-    ctx.fillStyle = P.textDim;
+    // Max evolution reached — reveal 知らない人＋N if reached, else masked name
+    ctx.fillStyle = st.maxLevel >= MAX_LEVEL ? '#d0b0ff' : P.textDim;
     ctx.font = '10px "Noto Sans JP", sans-serif';
-    ctx.fillText('最大進化: ' + evoName(st.maxLevel), CX, by + 138);
+    const evoSelf = st.maxLevel >= MAX_LEVEL ? `知らない人＋${st.unknownCount}` : evoName(st.maxLevel);
+    ctx.fillText('最大進化: ' + evoSelf, CX, by + 138);
 
     // Divider
     ctx.strokeStyle = P.gold; ctx.lineWidth = 1; ctx.globalAlpha = 0.3;
@@ -1512,7 +1797,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
         // 知らない人 が初めて誕生した瞬間の演出
-        if (nextLevel === MAX_LEVEL) triggerSecretFx();
+        if (nextLevel === MAX_LEVEL) { gs.current.unknownCount++; triggerSecretFx(); }
       }
 
       const s = gs.current;
@@ -1537,24 +1822,25 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // very slight initial spin; natural rolling comes from friction
     Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.03);
 
+    // falling SE: track this body and play until it first lands
+    fallingIdRef.current = body.id;
+    playFall();
+
     st.currentLevel = st.nextLevel;
     st.nextLevel    = getRandomStartLevel();
     st.canDrop      = false;
     coolRef.current = Date.now() + DROP_COOLDOWN;
     setTimeout(() => { gs.current.canDrop = true; }, DROP_COOLDOWN);
-  }, [spawnMonster]);
+  }, [spawnMonster, playFall]);
 
   // ── Pause toggle ────────────────────────────────────────────
   const togglePause = useCallback(() => {
     const newVal = !isPausedRef.current;
     isPausedRef.current = newVal;
     setIsPaused(newVal);
-    if (newVal) {
-      bgmRef.current?.pause();
-    } else if (bgmOnRef.current && gs.current.phase === 'playing') {
-      bgmRef.current?.play().catch(() => {});
-    }
-  }, []);
+    if (newVal) stopFall(); // don't let the falling SE play through a pause
+    syncBgm(); // pause the active BGM, or resume the phase-appropriate one
+  }, [syncBgm, stopFall]);
 
   // ── Open the evolution-route popup (same content as the TOP "遊び方")
   //    Auto-pause while it's open during play so the game can't end. ──
@@ -1565,6 +1851,17 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
     modalRef.current = 'howto';
     setModal('howto');
+  }, [togglePause]);
+
+  // ── Ask before returning to TOP mid-game (score is not recorded). Pause
+  //    while the dialog is up so the game can't end behind it. ──
+  const confirmGoToTop = useCallback(() => {
+    if (gs.current.phase === 'playing' && !isPausedRef.current) {
+      togglePause();
+      pausedForModalRef.current = true;
+    }
+    modalRef.current = 'confirmTop';
+    setModal('confirmTop');
   }, [togglePause]);
 
   // ── Initialize / restart game ───────────────────────────────
@@ -1594,6 +1891,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     st.gameOverFrames = 0;
     st.overLineFrames = 0;
     st.maxLevel       = st.currentLevel;
+    st.unknownCount   = 0;
     st.phase          = 'playing';
     coolRef.current   = 0;
     secretFxRef.current = null;
@@ -1601,6 +1899,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     particlesRef.current = [];
     ringsRef.current = [];
     comboRef.current = { count: 0, lastTime: 0 };
+    stopFall();
     snapshotRef.current = null;
     viewingRef.current = false;
     isPausedRef.current = false;
@@ -1610,9 +1909,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const engine = Matter.Engine.create({ gravity: { x: 0, y: 1.8 } });
     engineRef.current = engine;
 
-    const ground = Matter.Bodies.rectangle(CX, FLOOR_Y + 40, W + 40, 80,  { isStatic: true, label: 'ground', friction: 0.6 });
-    const leftW  = Matter.Bodies.rectangle(GL / 2, H / 2, WALL + 2, H*2, { isStatic: true, label: 'wall',   friction: 0.4 });
-    const rightW = Matter.Bodies.rectangle(GR + WALL/2, H/2, WALL+2, H*2,{ isStatic: true, label: 'wall',   friction: 0.4 });
+    const ground = Matter.Bodies.rectangle(CX, FLOOR_Y + 40, W + 200, 80,  { isStatic: true, label: 'ground', friction: 0.6 });
+    const leftW  = Matter.Bodies.rectangle(GL - 50, H / 2, 100, H * 2, { isStatic: true, label: 'wall', friction: 0.4 });
+    const rightW = Matter.Bodies.rectangle(GR + 50, H / 2, 100, H * 2, { isStatic: true, label: 'wall', friction: 0.4 });
     Matter.Composite.add(engine.world, [ground, leftW, rightW]);
 
     // "ぷにっ" — squash a body on a hard contact (landing / impact)
@@ -1635,6 +1934,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         // bounce squash on any hard contact (incl. landing on floor/wall)
         if (!a.isStatic) triggerSquash(a);
         if (!b.isStatic) triggerSquash(b);
+        // falling SE: cut it the instant the dropped block first lands
+        if (fallingIdRef.current >= 0 && (a.id === fallingIdRef.current || b.id === fallingIdRef.current)) {
+          stopFall();
+        }
         // merge only when two dynamic monster bodies meet
         if (pair.bodyA.isStatic || pair.bodyB.isStatic) continue;
         if (a === b) continue; // internal part-vs-part collision
@@ -1650,9 +1953,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     setUiPhase('playing');
     const goAudio = bgmGameoverRef.current;
     if (goAudio) { goAudio.pause(); goAudio.currentTime = 0; }
-    const bgm = bgmRef.current;
-    if (bgm && bgmOnRef.current) { bgm.currentTime = 0; bgm.play().catch(() => {}); }
-    else if (bgm) { bgm.pause(); bgm.currentTime = 0; }
+    bgmRef.current?.pause();                         // stop the TOP BGM
+    if (bgmPlayRef.current) bgmPlayRef.current.currentTime = 0; // restart play BGM
+    syncBgm();                                       // start the solo play BGM
 
     let last = 0;
     const loop = (ts: number) => {
@@ -1704,7 +2007,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           else s.overLineFrames = 0;
           if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
             s.phase = 'gameover';
+            stopFall();
             bgmRef.current?.pause();
+            bgmPlayRef.current?.pause();             // stop the solo play BGM
             const go = bgmGameoverRef.current;
             if (go && bgmOnRef.current) { go.currentTime = 0; go.play().catch(() => {}); }
             if (s.score > s.highScore) {
@@ -1715,7 +2020,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             // immediately, then replace it with the shared online result
             // once the submission resolves.
             const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-            const entry = { name, score: s.score, maxLevel: s.maxLevel };
+            const entry = { name, score: s.score, maxLevel: s.maxLevel, unknown: s.unknownCount };
             const local = insertRanking(entry);
             rankingRef.current = local.list;
             lastRankIdxRef.current = local.index;
@@ -1732,9 +2037,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       // Render
       ctx.clearRect(0, 0, W, H);
-      drawBG(ctx);
-      drawWalls(ctx);
-      drawCeiling(ctx);
+      const useFrame = frameReadyRef.current && frameImgRef.current;
+      drawBG(ctx);                 // veil/grid/motes inside the play field
+      if (!useFrame) { drawWalls(ctx); drawCeiling(ctx); } // procedural chrome (fallback)
 
       // Pulse factor for the danger outline (visibility)
       const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.012);
@@ -1774,7 +2079,14 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       // Merge bursts (light orbs) over the monsters, beneath the HUD
       drawParticles(ctx, !isPausedRef.current);
 
-      drawHUD(ctx, s);
+      if (useFrame) {
+        // decorative frame on top of the field, then live values in its plates
+        ctx.drawImage(frameImgRef.current as HTMLImageElement, 0, 0, W, H);
+        drawCeiling(ctx);  // danger line drawn over frame skin
+        drawLiveHUD(ctx, s);
+      } else {
+        drawHUD(ctx, s);
+      }
 
       // Capture the final board ONCE for the screenshot (before the
       // game-over overlay is drawn over it)
@@ -1797,7 +2109,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawGameOver, drawBoardView, drawPopups, drawParticles, drawSecretFx, drawPauseOverlay, handleMerge]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawLiveHUD, drawGameOver, drawBoardView, drawPopups, drawParticles, drawSecretFx, drawPauseOverlay, handleMerge, syncBgm, stopFall]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
@@ -1838,16 +2150,14 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     gs.current.phase = 'start';
     viewingRef.current = false;
     setUiPhase('start');
-    // stop the game-over jingle, resume the top BGM
+    // stop the game-over jingle + play BGM, resume the TOP BGM
     const go = bgmGameoverRef.current;
     if (go) { go.pause(); go.currentTime = 0; }
-    const bgm = bgmRef.current;
-    if (bgm) {
-      bgm.currentTime = 0;
-      if (bgmOnRef.current) bgm.play().catch(() => {});
-    }
+    bgmPlayRef.current?.pause();
+    if (bgmRef.current) bgmRef.current.currentTime = 0;
+    syncBgm();
     runStartLoop();
-  }, [runStartLoop]);
+  }, [runStartLoop, syncBgm]);
 
   // ── Start screen animation (mount) ─────────────────────────
   useEffect(() => {
@@ -1863,12 +2173,16 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       if (!wrap) return;
       // Fit the board to BOTH the available width and height, and allow
       // it to grow beyond 1× (using the space freed by removing the header).
+      // Push the board down from the very top so it isn't "too high"; reserve
+      // that offset (plus the footer) in the height budget so nothing is cut.
+      const TOP_OFFSET = 44;
       const availW = (wrap.parentElement?.clientWidth ?? window.innerWidth) - 8;
-      const availH = window.innerHeight - 48; // leave room for the footer
+      const availH = window.innerHeight - 52 - TOP_OFFSET;
       const s = Math.max(0.2, Math.min(availW / W, availH / H, 2.2));
       scaleRef.current = s;
       wrap.style.transform       = `scale(${s})`;
       wrap.style.transformOrigin = 'top center';
+      wrap.style.marginTop       = `${TOP_OFFSET}px`;
       wrap.style.marginBottom    = `${(H * s - H)}px`;
     };
     update();
@@ -1884,12 +2198,28 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const rect = canvas.getBoundingClientRect();
       return (clientX - rect.left) / scaleRef.current;
     };
-    const onMove  = (e: MouseEvent) => { gs.current.dropX = Math.max(GL+5, Math.min(GR-5, toX(e.clientX))); };
+    const MENU_BTNS = [MENU_START_BTN, MENU_BATTLE_BTN, MENU_RANK_BTN, MENU_SET_BTN, MENU_HOW_BTN];
+    const onMove  = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const s = scaleRef.current;
+      const x = (e.clientX - rect.left) / s;
+      const y = (e.clientY - rect.top)  / s;
+      pointerRef.current = { x, y };
+      gs.current.dropX = Math.max(GL + 5, Math.min(GR - 5, x));
+      // pointer cursor when hovering a TOP-menu button
+      if (gs.current.phase === 'start') {
+        const over = MENU_BTNS.some((b) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+        canvas.style.cursor = over ? 'pointer' : 'crosshair';
+      }
+    };
+    const onLeave = () => { pointerRef.current = { x: -1, y: -1 }; };
     const onTouch = (e: TouchEvent) => { e.preventDefault(); gs.current.dropX = Math.max(GL+5, Math.min(GR-5, toX(e.touches[0].clientX))); };
     canvas.addEventListener('mousemove', onMove);
+    canvas.addEventListener('mouseleave', onLeave);
     canvas.addEventListener('touchmove', onTouch, { passive: false });
     return () => {
       canvas.removeEventListener('mousemove', onMove);
+      canvas.removeEventListener('mouseleave', onLeave);
       canvas.removeEventListener('touchmove', onTouch);
     };
   }, []);
@@ -1986,32 +2316,42 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             lineHeight: '1',
           };
           const soundOn = bgmOn && seOn;
+          // The frame.png has three baked circles top-right; drop our buttons
+          // into them (transparent, no border — the circle art is the button).
+          const circle = (cx: number, cy: number): React.CSSProperties => ({
+            position: 'absolute', left: cx - 16, top: cy - 16, width: 32, height: 32,
+            background: 'transparent', border: 'none', color: '#fff8e0', fontSize: 16,
+            cursor: 'pointer', zIndex: 5, display: 'flex', alignItems: 'center',
+            justifyContent: 'center', padding: 0, lineHeight: '1',
+            textShadow: '0 1px 3px rgba(0,0,0,0.7)',
+          });
           return (
             <>
-              {/* サウンドON/OFF（全フェーズ共通） */}
+              {/* 進化順（卵） — 左の丸（ゲーム中のみ） */}
+              {uiPhase === 'playing' && (
+                <button style={circle(331, 70)} onClick={openEvolution} title="進化順を見る">🥚</button>
+              )}
+              {/* サウンドON/OFF — 中央の丸（全フェーズ） */}
               <button
-                style={{ ...btnBase, right: 12 }}
+                style={circle(366, 70)}
                 onClick={() => { unlockAudio(); const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
               >
                 {soundOn ? '🔊' : '🔇'}
               </button>
-              {/* 一時停止（ゲーム中のみ） */}
+              {/* 一時停止 — 右の丸（ゲーム中のみ） */}
               {uiPhase === 'playing' && (
-                <button
-                  style={{ ...btnBase, right: 54 }}
-                  onClick={togglePause}
-                >
+                <button style={circle(402, 70)} onClick={togglePause}>
                   {isPaused ? '▶' : '⏸'}
                 </button>
               )}
-              {/* 進化順を確認（停止ボタンの左・ゲーム中のみ） */}
+              {/* TOPに戻る（ゲーム中のみ・確認あり）— 盤面の枠の外（上）に配置 */}
               {uiPhase === 'playing' && (
                 <button
-                  style={{ ...btnBase, right: 96 }}
-                  onClick={openEvolution}
-                  title="進化順を見る"
+                  style={{ ...btnBase, top: -42, left: 0, height: 32, width: 'auto', padding: '0 12px', fontSize: 13, fontWeight: 700 }}
+                  onClick={confirmGoToTop}
+                  title="TOPに戻る"
                 >
-                  🥚
+                  🏠 TOPに戻る
                 </button>
               )}
             </>
@@ -2131,8 +2471,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
                             <td style={{ padding: '7px 4px', textAlign: 'right', color: '#ffe050', fontWeight: 'bold' }}>
                               {e.score}
                             </td>
-                            <td style={{ padding: '7px 4px', textAlign: 'right', color: '#6a6a90', fontSize: 10 }}>
-                              {evoName(e.maxLevel)}
+                            <td style={{ padding: '7px 4px', textAlign: 'right', color: e.maxLevel >= MAX_LEVEL ? '#d0b0ff' : '#6a6a90', fontSize: 10 }}>
+                              {rankEvoLabel(e)}
                             </td>
                           </tr>
                         ))}
@@ -2193,6 +2533,25 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
                     </div>
                   </div>
                   <button style={closeBtn} onClick={closeModal}>閉じる</button>
+                </>)}
+
+                {modal === 'confirmTop' && (<>
+                  <h2 style={h2Style}>🏠 TOPに戻りますか？</h2>
+                  <p style={{ textAlign: 'center', fontSize: 13, lineHeight: 1.8, color: '#f0e0b0', margin: '0 0 4px' }}>
+                    TOPに戻ると、現在のスコアは<br />記録されません。本当に戻りますか？
+                  </p>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 18 }}>
+                    <button style={{ ...closeBtn, margin: 0 }} onClick={closeModal}>いいえ</button>
+                    <button
+                      style={{ ...closeBtn, margin: '0', border: '1.5px solid #ffe050', color: '#fffadc', background: 'linear-gradient(180deg,#3a2a00,#7a6018,#3a2a00)' }}
+                      onClick={() => {
+                        pausedForModalRef.current = false;
+                        isPausedRef.current = false; setIsPaused(false);
+                        modalRef.current = null; setModal(null);
+                        goToTop();
+                      }}
+                    >TOPに戻る</button>
+                  </div>
                 </>)}
               </div>
             </div>

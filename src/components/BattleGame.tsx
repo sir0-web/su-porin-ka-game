@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MONSTERS, MAX_LEVEL } from '@/lib/monsters';
-import { buildSprite, rrect, type Sprite } from '@/lib/sprites';
+import { buildSprite, rrect, hexA, type Sprite } from '@/lib/sprites';
 import { drawMonster, drawOre, evoName } from '@/lib/draw';
 import { LocalBoard, type MergeFx } from '@/lib/battle/board';
 import { CpuController } from '@/lib/battle/cpu';
@@ -50,6 +50,10 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const [ready, setReady] = useState(false);
   const [count, setCount] = useState(3);
   const [results, setResults] = useState<ResultRow[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);   // transient banner (e.g. disconnects)
+  const [confirmExit, setConfirmExit] = useState(false);       // "back to TOP" confirm during a match
+  const noticeTimerRef = useRef<number>(0);
+  const takenOverRef = useRef<Set<string>>(new Set());         // human ids converted to CPU on disconnect
 
   const netRef = useRef<BattleNet | null>(null);
   const selfId = clientId();
@@ -73,6 +77,10 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const matchLeftRef = useRef(0);     // cached remaining seconds (avoid re-render spam)
   const connectedRef = useRef(false); // net connected once; persists across phases
   const matterRef = useRef<typeof import('matter-js') | null>(null);
+  const bgmRef = useRef<HTMLAudioElement | null>(null); // battle BGM
+  const seGattaiRef = useRef<HTMLAudioElement | null>(null);       // merge SE
+  const seShiranaihitoRef = useRef<HTMLAudioElement | null>(null); // special-merge SE
+  const seFallRef = useRef<HTMLAudioElement | null>(null);         // block-falling SE
 
   // ── Preprocess monster sprites (same as the solo game) ──
   useEffect(() => {
@@ -87,6 +95,55 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       img.src = m.imageSrc;
     });
   }, []);
+
+  // ── Battle BGM: play during the countdown + match, stop otherwise. A
+  //    document-level gesture listener resumes playback if the browser blocked
+  //    the initial play() (autoplay policy) — same recovery as the solo game. ──
+  useEffect(() => {
+    const bgm = new Audio('/bgm/battle.mp3');
+    bgm.loop = true;
+    bgm.volume = 0.4;
+    bgmRef.current = bgm;
+    return () => { bgm.pause(); bgmRef.current = null; };
+  }, []);
+
+  // ── Merge SE (same assets as the solo game). Played for YOUR own board's
+  //    merges only, so CPU/opponent merges don't spam sound. ──
+  useEffect(() => {
+    const se = new Audio('/se/gattai.wav'); se.volume = 0.7; seGattaiRef.current = se;
+    const seS = new Audio('/se/shiranaihito.wav'); seS.volume = 0.8; seShiranaihitoRef.current = seS;
+    const seF = new Audio('/se/fall.mp3'); seF.volume = 0.5; seFallRef.current = seF;
+    return () => { seF.pause(); };
+  }, []);
+  const playSe = useCallback((special: boolean) => {
+    const el = special ? seShiranaihitoRef.current : seGattaiRef.current;
+    if (!el) return;
+    try { const c = el.cloneNode() as HTMLAudioElement; c.volume = el.volume; c.play().catch(() => {}); } catch { /* */ }
+  }, []);
+  // Falling SE for your own block: start on drop, cut on first landing.
+  const playFall = useCallback(() => {
+    const f = seFallRef.current; if (!f) return;
+    try { f.currentTime = 0; f.play().catch(() => {}); } catch { /* */ }
+  }, []);
+  const stopFall = useCallback(() => {
+    const f = seFallRef.current; if (!f) return;
+    try { f.pause(); f.currentTime = 0; } catch { /* */ }
+  }, []);
+
+  useEffect(() => {
+    const bgm = bgmRef.current;
+    if (!bgm) return;
+    const playing = phase === 'countdown' || phase === 'playing';
+    if (playing) { bgm.play().catch(() => {}); }
+    else { bgm.pause(); stopFall(); if (phase !== 'result') bgm.currentTime = 0; }
+    const recover = () => {
+      if ((phaseRef.current === 'countdown' || phaseRef.current === 'playing') && bgm.paused) {
+        bgm.play().catch(() => {});
+      }
+    };
+    document.addEventListener('pointerdown', recover, true);
+    return () => document.removeEventListener('pointerdown', recover, true);
+  }, [phase, stopFall]);
 
   // ── Orientation detection ──
   useEffect(() => {
@@ -173,12 +230,48 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     if (b && !offlineRef.current) netRef.current?.sendSnapshot(b.serialize(id));
   }, []);
 
+  // Show a transient banner (e.g. "Xさんの接続がきれました"), auto-hides.
+  const showNotice = useCallback((text: string) => {
+    setNotice(text);
+    window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), 3600);
+  }, []);
+
+  // Merge feedback for a board I simulate: burst FX + (own board only) SE.
+  const onMergeFx = useCallback((id: string, fx: MergeFx) => {
+    burstRef.current.push({
+      id, x: fx.x, y: fx.y, start: Date.now(),
+      color: fx.level >= MAX_LEVEL ? '#c8a0ff' : MONSTERS[fx.level].glowColor,
+      big: fx.big,
+    });
+    if (id === selfId) playSe(fx.level >= MAX_LEVEL);
+  }, [selfId, playSe]);
+
+  // Create a board I simulate (my own, a CPU, or a disconnected human taken
+  // over as a CPU). Passing a cpuLevel also attaches a CPU controller.
+  const createBoard = useCallback((id: string, seed: number, cpuLevel?: CpuLevel) => {
+    const M = matterRef.current;
+    if (!M) return null;
+    const b = new LocalBoard(M, procRef.current, {
+      onAttack: (c) => routeAttack(id, c),
+      onMerge: (fx) => onMergeFx(id, fx),
+      onDead: () => onBoardDead(id),
+      // falling SE only for your own board
+      onDrop: id === selfId ? playFall : undefined,
+      onLand: id === selfId ? stopFall : undefined,
+    }, seed);
+    boardsRef.current.set(id, b);
+    if (cpuLevel) cpusRef.current.set(id, new CpuController(b, cpuLevel, seed + 104729));
+    return b;
+  }, [routeAttack, onMergeFx, onBoardDead, selfId, playFall, stopFall]);
+
   // ── Begin the match (shared by owner + members) ────────────
   const beginGame = useCallback(async (order: string[], seed: number) => {
     const M = matterRef.current ?? (await import('matter-js'));
     matterRef.current = M;
     orderRef.current = order;
     placementsRef.current.clear();
+    takenOverRef.current.clear();
     resultsDoneRef.current = false;
     snapsRef.current.clear();
     flyRef.current = [];
@@ -187,46 +280,57 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     boardsRef.current.clear();
     cpusRef.current.clear();
 
-    const onMerge = (id: string) => (fx: MergeFx) => {
-      burstRef.current.push({
-        id, x: fx.x, y: fx.y, start: Date.now(),
-        color: fx.level >= MAX_LEVEL ? '#c8a0ff' : MONSTERS[fx.level].glowColor,
-        big: fx.big,
-      });
-    };
-
     // My own human board.
-    const mine = new LocalBoard(M, procRef.current, {
-      onAttack: (c) => routeAttack(selfId, c),
-      onMerge: onMerge(selfId),
-      onDead: () => onBoardDead(selfId),
-    }, seed);
-    boardsRef.current.set(selfId, mine);
+    createBoard(selfId, seed);
 
     // Host simulates every CPU board.
     if (isOwnerRef.current) {
       order.forEach((id, i) => {
         if (!id.startsWith('cpu_')) return;
         const level = (room.cpus.find((c) => `cpu_${c.index}` === id)?.level ?? 3) as CpuLevel;
-        const cb = new LocalBoard(M, procRef.current, {
-          onAttack: (c) => routeAttack(id, c),
-          onMerge: onMerge(id),
-          onDead: () => onBoardDead(id),
-        }, seed + i * 7919);
-        boardsRef.current.set(id, cb);
-        cpusRef.current.set(id, new CpuController(cb, level, seed + i * 104729));
+        createBoard(id, seed + i * 7919, level);
       });
     }
 
     setCount(3);
     setPhaseBoth('countdown');
-  }, [room.cpus, routeAttack, selfId, onBoardDead]);
+  }, [room.cpus, selfId, createBoard]);
+
+  // ── Detect human disconnects during a match: notify everyone, and (host)
+  //    take over the dropped player's board as a CPU Lv5 so the match goes on.
+  //    Also ensures a newly-promoted host simulates every board it should. ──
+  const checkDisconnects = useCallback((humans: PresenceState[]) => {
+    if (offlineRef.current) return;
+    const ph = phaseRef.current;
+    if (ph !== 'playing' && ph !== 'countdown') return;
+    const present = new Set(humans.map((h) => h.id));
+    for (const id of orderRef.current) {
+      if (id === selfId || id.startsWith('cpu_') || takenOverRef.current.has(id)) continue;
+      if (!present.has(id)) {
+        takenOverRef.current.add(id);
+        showNotice(`${(namesRef.current.get(id) ?? '相手').slice(0, 10)}さんの接続がきれました`);
+      }
+    }
+    // Host (incl. a freshly-promoted one) must simulate every CPU board and
+    // every taken-over human it isn't already simulating.
+    if (isOwnerRef.current && matterRef.current) {
+      orderRef.current.forEach((id, i) => {
+        if (id === selfId || boardsRef.current.has(id)) return;
+        const isCpu = id.startsWith('cpu_');
+        if (!isCpu && !takenOverRef.current.has(id)) return; // human still connected
+        const level = isCpu
+          ? ((room.cpus.find((c) => `cpu_${c.index}` === id)?.level ?? 3) as CpuLevel)
+          : (5 as CpuLevel);
+        createBoard(id, (room.seed ?? 1) + i * 7919, level);
+      });
+    }
+  }, [selfId, room.cpus, room.seed, showNotice, createBoard]);
 
   // Keep the latest game handlers in a ref so the networking effect can
   // run ONCE per lobby session without re-subscribing every time these
   // callbacks are recreated (which would tear down & reset the room).
-  const handlersRef = useRef({ beginGame });
-  handlersRef.current = { beginGame };
+  const handlersRef = useRef({ beginGame, checkDisconnects });
+  handlersRef.current = { beginGame, checkDisconnects };
 
   // ── Networking setup — connect ONCE, keep the connection alive for the
   //    whole battle session (lobby → countdown → playing → result). It is
@@ -261,6 +365,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
         isOwnerRef.current = (hs[0]?.id === selfId);
         hs.forEach((h) => namesRef.current.set(h.id, h.name));
         rm.cpus.forEach((c) => namesRef.current.set(`cpu_${c.index}`, c.name));
+        // During a match this also fires on presence changes → detect drops.
+        handlersRef.current.checkDisconnects?.(hs);
       },
       onStart: (msg) => {
         msg.order.forEach((id) => { if (!namesRef.current.has(id)) namesRef.current.set(id, id); });
@@ -386,29 +492,64 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     return () => clearInterval(iv);
   }, [phase]);
 
-  // ── Layout: all boards in a single horizontal row ──────────
-  //    Self is leftmost and a bit larger; opponents line up to its right
-  //    (full height each → much better visibility than a vertical stack).
+  // ── Layout: self board large on the left, opponents stacked in a single
+  //    vertical column on the right (each opponent uses an equal share of the
+  //    full height). The self board is a portrait board, so it is bound by the
+  //    screen height — it fills the full height (its maximum) while the
+  //    opponents are compacted into a thin column so the self board dominates.
   const computeRects = useCallback((cw: number, ch: number) => {
     const order = orderRef.current;
     const opp = order.filter((id) => id !== selfId);
-    const ids = [selfId, ...opp];
     const rects = new Map<string, { x: number; y: number; w: number; h: number }>();
     const pad = 8, gap = 8, PLATE = 24;
-    const fit = (ax: number, ay: number, aw: number, ah: number) => {
-      const ah2 = Math.max(40, ah - PLATE);
-      let w = aw, h = w / BOARD_ASPECT;
-      if (h > ah2) { h = ah2; w = h * BOARD_ASPECT; }
-      return { x: ax + (aw - w) / 2, y: ay + (ah2 - h) / 2, w, h };
+    // Extra headroom at the top so boards sit below the timer / exit controls
+    // (they were hugging the very top edge before).
+    const padTop = Math.round(Math.max(48, ch * 0.07));
+    const availH = ch - padTop - pad;
+
+    // Largest board (w,h) fitting a box of (boxW, boxH) minus the score plate,
+    // keeping the board aspect. Portrait boards are normally height-bound.
+    const fitSize = (boxW: number, boxH: number) => {
+      const h0 = Math.max(40, boxH - PLATE);
+      let h = h0, w = h * BOARD_ASPECT;
+      if (w > boxW) { w = boxW; h = w / BOARD_ASPECT; }
+      return { w, h };
     };
-    const weights = ids.map((id) => (id === selfId ? 3.2 : 0.6));
-    const total = weights.reduce((a, b) => a + b, 0);
-    const avail = cw - pad * 2 - gap * (ids.length - 1);
-    let x = pad;
-    ids.forEach((id, i) => {
-      const colW = (avail * weights[i]) / total;
-      rects.set(id, fit(x, pad, colW, ch - pad * 2));
-      x += colW + gap;
+
+    if (opp.length === 0) {
+      const { w, h } = fitSize(cw - pad * 2, availH);
+      rects.set(selfId, { x: (cw - w) / 2, y: padTop, w, h });
+      return rects;
+    }
+
+    // Opponent column on the right: each opponent gets an equal slice of the
+    // full height (uses the vertical space to the max).
+    const n = opp.length;
+    const cellH = (availH - gap * (n - 1)) / n;
+    const oppSize = fitSize(cw, cellH);            // height-bound → narrow column
+    const oppColW = oppSize.w;
+
+    // Self board at full height, taking the remaining width. The self board +
+    // opponent column are centered together so the pair sits balanced on
+    // screen (a lone portrait board can't fill a wide landscape, so the
+    // leftover width becomes symmetric side margins instead of one dead gap).
+    const selfSize = fitSize(cw - pad * 2 - gap - oppColW, availH);
+    const groupW = selfSize.w + gap + oppColW;
+    const x0 = Math.max(pad, (cw - groupW) / 2);
+    rects.set(selfId, {
+      x: x0,
+      y: padTop + (availH - PLATE - selfSize.h) / 2,
+      w: selfSize.w, h: selfSize.h,
+    });
+
+    const oppX = x0 + selfSize.w + gap;
+    opp.forEach((id, i) => {
+      const cy = padTop + i * (cellH + gap);
+      rects.set(id, {
+        x: oppX + (oppColW - oppSize.w) / 2,
+        y: cy + (cellH - PLATE - oppSize.h) / 2,
+        w: oppSize.w, h: oppSize.h,
+      });
     });
     return rects;
   }, [selfId]);
@@ -425,23 +566,65 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     ctx.translate(rect.x, rect.y);
     ctx.scale(s, s);
 
-    // field background
-    ctx.fillStyle = 'rgba(7,7,30,0.82)';
+    // field background — gradient veil for depth
+    const veil = ctx.createLinearGradient(0, 0, 0, B_FLOOR_Y);
+    veil.addColorStop(0,   'rgba(12,12,40,0.80)');
+    veil.addColorStop(0.5, 'rgba(7,7,30,0.84)');
+    veil.addColorStop(1,   'rgba(4,4,18,0.90)');
+    ctx.fillStyle = veil;
     ctx.fillRect(0, 0, BW, B_H);
 
-    // walls
-    ctx.fillStyle = '#0c0c2a';
-    ctx.fillRect(0, 0, B_WALL, B_H);
-    ctx.fillRect(B_GR, 0, B_WALL, B_H);
-    ctx.fillRect(0, B_FLOOR_Y, BW, B_H - B_FLOOR_Y);
-    ctx.strokeStyle = isSelf ? '#ffe050' : '#2a1e60';
-    ctx.lineWidth = isSelf ? 4 : 2;
-    ctx.strokeRect(1, 1, BW - 2, B_H - 2);
+    // soft mystic glow falling from the danger line
+    const topG = ctx.createRadialGradient(BW / 2, B_CEILING_Y - 6, 6, BW / 2, B_CEILING_Y - 6, BW * 0.72);
+    topG.addColorStop(0, hexA('#6c78ff', 0.12));
+    topG.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = topG;
+    ctx.fillRect(0, 0, BW, B_FLOOR_Y);
 
-    // danger line
+    // walls (subtle gradient bevel)
+    const wlg = ctx.createLinearGradient(0, 0, B_WALL, 0);
+    wlg.addColorStop(0, '#060618'); wlg.addColorStop(1, '#13133c');
+    ctx.fillStyle = wlg; ctx.fillRect(0, 0, B_WALL, B_H);
+    const wrg = ctx.createLinearGradient(B_GR, 0, B_GR + B_WALL, 0);
+    wrg.addColorStop(0, '#13133c'); wrg.addColorStop(1, '#060618');
+    ctx.fillStyle = wrg; ctx.fillRect(B_GR, 0, B_WALL, B_H);
+    const wfg = ctx.createLinearGradient(0, B_FLOOR_Y, 0, B_H);
+    wfg.addColorStop(0, '#13133c'); wfg.addColorStop(1, '#060618');
+    ctx.fillStyle = wfg; ctx.fillRect(0, B_FLOOR_Y, BW, B_H - B_FLOOR_Y);
+
+    // edge vignette (frames the field)
+    const vcy = (B_CEILING_Y + B_FLOOR_Y) / 2;
+    const vg = ctx.createRadialGradient(BW / 2, vcy, 30, BW / 2, vcy, BW * 0.78);
+    vg.addColorStop(0,    'rgba(0,0,0,0)');
+    vg.addColorStop(0.72, 'rgba(0,0,0,0)');
+    vg.addColorStop(1,    'rgba(0,0,0,0.40)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, BW, B_FLOOR_Y);
+
+    // frame
+    if (isSelf) {
+      ctx.save();
+      ctx.strokeStyle = '#ffe050'; ctx.lineWidth = 4;
+      ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 12;
+      ctx.strokeRect(2, 2, BW - 4, B_H - 4);
+      ctx.shadowBlur = 0;
+      // gold corner accents
+      ctx.lineWidth = 3;
+      const cs = 22;
+      ctx.beginPath(); ctx.moveTo(2 + cs, 2); ctx.lineTo(2, 2); ctx.lineTo(2, 2 + cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(BW - 2 - cs, 2); ctx.lineTo(BW - 2, 2); ctx.lineTo(BW - 2, 2 + cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(2 + cs, B_H - 2); ctx.lineTo(2, B_H - 2); ctx.lineTo(2, B_H - 2 - cs); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(BW - 2 - cs, B_H - 2); ctx.lineTo(BW - 2, B_H - 2); ctx.lineTo(BW - 2, B_H - 2 - cs); ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = '#2a1e60'; ctx.lineWidth = 2;
+      ctx.strokeRect(1, 1, BW - 2, B_H - 2);
+    }
+
+    // danger line (glowing dashes)
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,48,48,0.8)';
+    ctx.strokeStyle = 'rgba(255,48,48,0.85)';
     ctx.lineWidth = 1.5;
+    ctx.shadowColor = 'rgba(255,40,40,0.6)'; ctx.shadowBlur = 6;
     ctx.setLineDash([7, 5]);
     ctx.beginPath(); ctx.moveTo(B_GL, B_CEILING_Y); ctx.lineTo(B_GR, B_CEILING_Y); ctx.stroke();
     ctx.restore();
@@ -481,23 +664,34 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
     // NEXT mini (top-right corner of board)
     ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    rrect(ctx, B_GR - 60, 6, 54, 30, 6); ctx.fill();
-    ctx.fillStyle = '#c8a030'; ctx.font = 'bold 9px "Noto Sans JP"'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText('NEXT', B_GR - 56, 9);
-    ctx.save(); ctx.translate(B_GR - 22, 22); ctx.scale(0.5, 0.5);
-    drawMonster(ctx, 0, 0, next, procRef.current, { alpha: 0.9 });
+    ctx.globalAlpha = 0.95;
+    {
+      const ng = ctx.createLinearGradient(0, 6, 0, 36);
+      ng.addColorStop(0, 'rgba(28,24,60,0.82)'); ng.addColorStop(1, 'rgba(4,4,18,0.82)');
+      ctx.fillStyle = ng;
+      rrect(ctx, B_GR - 60, 6, 54, 30, 6); ctx.fill();
+      ctx.strokeStyle = hexA('#c8a030', 0.6); ctx.lineWidth = 1;
+      rrect(ctx, B_GR - 60, 6, 54, 30, 6); ctx.stroke();
+      ctx.fillStyle = '#c8a030'; rrect(ctx, B_GR - 60, 6, 54, 2.5, 2); ctx.fill();
+    }
+    ctx.fillStyle = '#ffe050'; ctx.font = 'bold 9px "Noto Sans JP"'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('NEXT', B_GR - 56, 10);
+    ctx.save(); ctx.translate(B_GR - 22, 23); ctx.scale(0.5, 0.5);
+    drawMonster(ctx, 0, 0, next, procRef.current, { alpha: 0.95 });
     ctx.restore();
     ctx.restore();
 
     // pending-ore waiting area indicator (top-left)
     if (pending > 0) {
       ctx.save();
-      ctx.fillStyle = 'rgba(60,20,90,0.85)';
+      const pg = ctx.createLinearGradient(0, 6, 0, 32);
+      pg.addColorStop(0, 'rgba(96,36,150,0.9)'); pg.addColorStop(1, 'rgba(40,12,70,0.9)');
+      ctx.fillStyle = pg;
       rrect(ctx, 8, 6, 70, 26, 6); ctx.fill();
+      ctx.strokeStyle = 'rgba(200,140,255,0.7)'; ctx.lineWidth = 1;
+      rrect(ctx, 8, 6, 70, 26, 6); ctx.stroke();
       drawOre(ctx, 22, 19, 9, 1);
-      ctx.fillStyle = '#e8d24a'; ctx.font = 'bold 14px "Oswald", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f0d860'; ctx.font = 'bold 14px "Oswald", sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.fillText('×' + pending, 34, 20);
       ctx.restore();
     }
@@ -516,11 +710,21 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
     // name + score plate UNDER the board (screen space)
     const plateH = 22;
+    const pty = rect.y + rect.h + 2;
     ctx.save();
-    ctx.fillStyle = isSelf ? 'rgba(58,42,0,0.9)' : 'rgba(8,8,28,0.9)';
-    rrect(ctx, rect.x, rect.y + rect.h + 2, rect.w, plateH, 5); ctx.fill();
+    const plg = ctx.createLinearGradient(0, pty, 0, pty + plateH);
+    if (isSelf) { plg.addColorStop(0, 'rgba(96,72,8,0.92)'); plg.addColorStop(1, 'rgba(40,28,0,0.92)'); }
+    else { plg.addColorStop(0, 'rgba(24,24,52,0.9)'); plg.addColorStop(1, 'rgba(6,6,22,0.9)'); }
+    ctx.fillStyle = plg;
+    rrect(ctx, rect.x, pty, rect.w, plateH, 5); ctx.fill();
+    // top sheen
+    ctx.save();
+    rrect(ctx, rect.x, pty, rect.w, plateH, 5); ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(rect.x, pty + 1, rect.w, 5);
+    ctx.restore();
     ctx.strokeStyle = isSelf ? '#ffe050' : '#3a3a60'; ctx.lineWidth = 1;
-    rrect(ctx, rect.x, rect.y + rect.h + 2, rect.w, plateH, 5); ctx.stroke();
+    rrect(ctx, rect.x, pty, rect.w, plateH, 5); ctx.stroke();
+    if (isSelf) { ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 8; rrect(ctx, rect.x, pty, rect.w, plateH, 5); ctx.stroke(); ctx.shadowBlur = 0; }
     ctx.fillStyle = isSelf ? '#fffadc' : '#e0d8c0';
     ctx.font = `bold ${Math.min(14, rect.w / 12)}px "Noto Sans JP"`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -585,14 +789,20 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       if (phaseRef.current === 'playing') {
         const m = Math.floor(matchLeftRef.current / 60), sgs = matchLeftRef.current % 60;
         const label = `${m}:${String(sgs).padStart(2, '0')}`;
+        const urgent = matchLeftRef.current <= 15;
         ctx.save();
-        ctx.fillStyle = 'rgba(6,6,28,0.85)';
+        const bg = ctx.createLinearGradient(0, 6, 0, 32);
+        bg.addColorStop(0, 'rgba(20,18,44,0.9)'); bg.addColorStop(1, 'rgba(5,5,20,0.9)');
+        ctx.fillStyle = bg;
         rrect(ctx, cw / 2 - 42, 6, 84, 26, 7); ctx.fill();
-        ctx.strokeStyle = matchLeftRef.current <= 15 ? '#ff5050' : '#c8a030'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = urgent ? '#ff5050' : '#c8a030'; ctx.lineWidth = 1.5;
+        if (urgent) { ctx.shadowColor = '#ff4040'; ctx.shadowBlur = 10 + 6 * (0.5 + 0.5 * Math.sin(Date.now() * 0.012)); }
         rrect(ctx, cw / 2 - 42, 6, 84, 26, 7); ctx.stroke();
-        ctx.fillStyle = matchLeftRef.current <= 15 ? '#ff7070' : '#ffe050';
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#c8a030'; rrect(ctx, cw / 2 - 42, 6, 84, 2.5, 2); ctx.fill();
+        ctx.fillStyle = urgent ? '#ff8080' : '#ffe050';
         ctx.font = 'bold 18px "Oswald", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(label, cw / 2, 20);
+        ctx.fillText(label, cw / 2, 21);
         ctx.restore();
       }
 
@@ -653,8 +863,10 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     if (phase !== 'playing') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // Relative drag with a gain so a SMALL finger movement moves the block a
-    // LOT (light/responsive). Works anywhere on screen (spec ①).
+    // ── Touch (mobile): relative drag-to-aim (a SMALL finger move = a BIG
+    //    block move) + release-to-drop. There is no hover on touch, and your
+    //    board is only part of a wide multi-board screen, so absolute mapping
+    //    would be far too sensitive — hence the amplified relative drag. ──
     const GAIN = 2.6; // board-units moved per screen px of finger travel
     let downX = 0, startDropX = B_CX, downT = 0, moved = false;
     const onDown = (x: number) => {
@@ -673,22 +885,32 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
       if (!moved && Date.now() - downT < 400) b.drop(); // tap = drop in place
       else if (moved) b.drop();                          // swipe = position then drop
     };
-    const md = (e: MouseEvent) => onDown(e.clientX);
-    const mm = (e: MouseEvent) => { if (e.buttons) onMove(e.clientX); };
-    const mu = () => onUp();
+
+    // ── Mouse (desktop): hover to aim (cursor mapped absolutely over your own
+    //    board) + press to drop — same feel as the solo game. (Hover-aiming
+    //    only works with a mouse; touch keeps the drag model above.) ──
+    const aimMouse = (clientX: number) => {
+      const b = boardsRef.current.get(selfId);
+      if (!b || b.dead) return;
+      const rect = rectsRef.current.get(selfId);
+      if (!rect || rect.w <= 0) return;
+      const sx = canvas.width / window.innerWidth;        // device-px per CSS-px
+      b.moveTo(((clientX * sx) - rect.x) / rect.w * BW);   // → board units (clamped)
+    };
+    const md = (e: MouseEvent) => { aimMouse(e.clientX); boardsRef.current.get(selfId)?.drop(); };
+    const mm = (e: MouseEvent) => aimMouse(e.clientX);
+
     const ts = (e: TouchEvent) => { e.preventDefault(); onDown(e.touches[0].clientX); };
     const tm = (e: TouchEvent) => { e.preventDefault(); onMove(e.touches[0].clientX); };
     const te = (e: TouchEvent) => { e.preventDefault(); onUp(); };
     canvas.addEventListener('mousedown', md);
     canvas.addEventListener('mousemove', mm);
-    canvas.addEventListener('mouseup', mu);
     canvas.addEventListener('touchstart', ts, { passive: false });
     canvas.addEventListener('touchmove', tm, { passive: false });
     canvas.addEventListener('touchend', te, { passive: false });
     return () => {
       canvas.removeEventListener('mousedown', md);
       canvas.removeEventListener('mousemove', mm);
-      canvas.removeEventListener('mouseup', mu);
       canvas.removeEventListener('touchstart', ts);
       canvas.removeEventListener('touchmove', tm);
       canvas.removeEventListener('touchend', te);
@@ -733,8 +955,43 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     }}>
       <canvas ref={canvasRef} style={{ display: 'block', touchAction: 'none', position: 'absolute', inset: 0 }} />
 
-      {/* Exit button (always) */}
-      <button onClick={onExit} style={exitBtn}>✕ TOPへ</button>
+      {/* Exit button (always). Confirm if a match is in progress. */}
+      <button
+        onClick={() => {
+          if (phase === 'playing' || phase === 'countdown') setConfirmExit(true);
+          else onExit();
+        }}
+        style={exitBtn}
+      >✕ TOPへ</button>
+
+      {/* Transient notice banner (e.g. a disconnect → CPU takeover) */}
+      {notice && (
+        <div style={{
+          position: 'absolute', top: 48, left: '50%', transform: 'translateX(-50%)', zIndex: 35,
+          background: 'linear-gradient(180deg, rgba(40,20,70,0.95), rgba(10,6,26,0.95))',
+          border: '1.5px solid #c060ff', borderRadius: 10,
+          boxShadow: '0 4px 18px rgba(160,60,255,0.45)',
+          color: '#f3d2ff', fontSize: 14, fontWeight: 700, padding: '8px 18px',
+          fontFamily: '"Noto Sans JP", sans-serif', whiteSpace: 'nowrap', pointerEvents: 'none',
+        }}>
+          🔌 {notice} → 🤖 CPU Lv5 にきりかえ
+        </div>
+      )}
+
+      {/* Confirm: back to TOP during a match (score is not recorded) */}
+      {confirmExit && (
+        <Overlay>
+          <Panel title="TOPに戻りますか？">
+            <div style={{ fontSize: 13, color: '#f0e0b0', textAlign: 'center', lineHeight: 1.7, marginBottom: 4 }}>
+              TOPに戻ると、現在のスコアは<br />記録されません。本当に戻りますか？
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 16, justifyContent: 'center' }}>
+              <button onClick={() => setConfirmExit(false)} style={secondaryBtn}>いいえ</button>
+              <button onClick={onExit} style={primaryBtn}>TOPに戻る</button>
+            </div>
+          </Panel>
+        </Overlay>
+      )}
 
       {/* Orientation gate */}
       {!isLandscape && (
@@ -774,8 +1031,12 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
               {slots.map((s) => (
                 <div key={s.index} style={{
-                  border: `1.5px solid ${s.kind === 'empty' ? '#3a3a60' : '#c8a030'}`,
-                  borderRadius: 8, padding: 10, background: 'rgba(8,8,28,0.7)', minHeight: 78,
+                  border: `1.5px solid ${s.kind === 'empty' ? '#3a3a60' : s.kind === 'cpu' ? '#4a78c8' : '#c8a030'}`,
+                  borderRadius: 10, padding: 10, minHeight: 78,
+                  background: s.kind === 'empty'
+                    ? 'linear-gradient(160deg, rgba(16,16,38,0.6), rgba(6,6,22,0.6))'
+                    : 'linear-gradient(160deg, rgba(24,22,52,0.82), rgba(8,8,26,0.82))',
+                  boxShadow: s.kind === 'empty' ? 'none' : '0 3px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)',
                 }}>
                   {s.kind === 'human' && (
                     <div>
@@ -841,8 +1102,22 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 
       {/* Countdown */}
       {phase === 'countdown' && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <div style={{ fontSize: 120, fontWeight: 900, color: '#ffe050', textShadow: '0 0 30px #ff8000' }}>{count}</div>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', background: 'radial-gradient(circle at center, rgba(40,20,80,0.45), rgba(4,4,18,0.78))' }}>
+          <div
+            key={count}
+            style={{
+              fontSize: 150, fontWeight: 900, lineHeight: 1,
+              fontFamily: '"Oswald", "Noto Serif JP", sans-serif',
+              background: 'linear-gradient(180deg,#fff6d0 0%,#ffd24a 45%,#ff8a1e 100%)',
+              WebkitBackgroundClip: 'text', backgroundClip: 'text',
+              WebkitTextFillColor: 'transparent', color: 'transparent',
+              filter: 'drop-shadow(0 0 26px rgba(255,140,0,0.85)) drop-shadow(0 4px 6px rgba(0,0,0,0.6))',
+              animation: 'countPop 0.8s ease-out',
+            }}
+          >
+            {count}
+          </div>
+          <style>{`@keyframes countPop{0%{transform:scale(0.4);opacity:0}30%{transform:scale(1.15);opacity:1}55%{transform:scale(1)}100%{transform:scale(1);opacity:1}}`}</style>
         </div>
       )}
 
@@ -854,9 +1129,14 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
               const medal = r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : '４';
               return (
                 <div key={r.id} style={{
-                  padding: '8px 12px', marginBottom: 6, borderRadius: 8,
-                  background: r.place === 1 ? 'rgba(255,210,80,0.16)' : 'rgba(8,8,28,0.7)',
+                  padding: '9px 14px', marginBottom: 7, borderRadius: 10,
+                  background: r.place === 1
+                    ? 'linear-gradient(135deg, rgba(255,210,80,0.28), rgba(120,86,10,0.18))'
+                    : 'linear-gradient(135deg, rgba(20,20,46,0.78), rgba(8,8,26,0.78))',
                   border: `1px solid ${r.place === 1 ? '#ffd24a' : '#3a3a60'}`,
+                  boxShadow: r.place === 1
+                    ? '0 0 18px rgba(255,200,60,0.35), inset 0 1px 0 rgba(255,255,255,0.12)'
+                    : 'inset 0 1px 0 rgba(255,255,255,0.05)',
                   color: r.isSelf ? '#fff3c0' : '#e0d8c0',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -894,7 +1174,9 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
 function Overlay({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      position: 'absolute', inset: 0, background: 'rgba(4,4,20,0.86)',
+      position: 'absolute', inset: 0,
+      background: 'radial-gradient(circle at center, rgba(20,14,48,0.82), rgba(4,4,18,0.92))',
+      backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 20,
       fontFamily: '"Noto Sans JP", sans-serif',
     }}>{children}</div>
@@ -903,10 +1185,19 @@ function Overlay({ children }: { children: React.ReactNode }) {
 function Panel({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {
   return (
     <div style={{
-      background: 'rgba(8,8,28,0.97)', border: '1.5px solid #c8a030', borderRadius: 14,
-      padding: '20px 24px', width: wide ? 560 : 340, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto',
+      background: 'linear-gradient(160deg, rgba(22,20,48,0.98), rgba(8,8,26,0.98))',
+      border: '1.5px solid #c8a030', borderRadius: 16,
+      boxShadow: '0 14px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,224,80,0.14), inset 0 1px 0 rgba(255,255,255,0.07)',
+      padding: '22px 26px', width: wide ? 560 : 340, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto',
     }}>
-      <h2 style={{ textAlign: 'center', color: '#c8a030', margin: '0 0 16px', fontSize: 20 }}>{title}</h2>
+      <h2 style={{
+        textAlign: 'center', color: '#ffe050', margin: '0 0 16px', fontSize: 20, letterSpacing: 1.5,
+        textShadow: '0 0 14px rgba(255,200,60,0.55)',
+      }}>{title}</h2>
+      <div style={{
+        height: 2, margin: '0 0 16px', borderRadius: 2,
+        background: 'linear-gradient(90deg, rgba(200,160,48,0), #c8a030, rgba(200,160,48,0))',
+      }} />
       {children}
     </div>
   );
@@ -914,9 +1205,11 @@ function Panel({ title, children, wide }: { title: string; children: React.React
 
 const exitBtn: React.CSSProperties = {
   position: 'absolute', top: 8, left: 8, zIndex: 30,
-  background: 'rgba(6,6,28,0.88)', border: '1.5px solid #c8a030', borderRadius: 8,
+  background: 'linear-gradient(180deg, rgba(24,22,52,0.92), rgba(6,6,24,0.92))',
+  border: '1.5px solid #c8a030', borderRadius: 8,
   color: '#f0e0b0', fontSize: 12, padding: '6px 12px', cursor: 'pointer',
   fontFamily: '"Noto Sans JP", sans-serif',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)',
 };
 const inputStyle: React.CSSProperties = {
   display: 'block', width: '100%', boxSizing: 'border-box', margin: '6px 0 16px',
@@ -924,20 +1217,24 @@ const inputStyle: React.CSSProperties = {
   color: '#fff', fontSize: 15, fontWeight: 700, textAlign: 'center', padding: '8px', outline: 'none',
 };
 const primaryBtn: React.CSSProperties = {
-  background: 'linear-gradient(180deg,#3a2a00,#c8a030,#3a2a00)', border: '2px solid #ffe050',
-  borderRadius: 8, color: '#fffadc', fontSize: 15, fontWeight: 700, padding: '10px 22px', cursor: 'pointer',
-  fontFamily: '"Noto Sans JP", sans-serif',
+  background: 'linear-gradient(180deg,#5a4208,#e8be48 45%,#8a6810)', border: '2px solid #ffe050',
+  borderRadius: 9, color: '#3a2800', fontSize: 15, fontWeight: 800, padding: '10px 22px', cursor: 'pointer',
+  fontFamily: '"Noto Sans JP", sans-serif', letterSpacing: 0.5,
+  boxShadow: '0 4px 14px rgba(255,200,60,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
+  textShadow: '0 1px 0 rgba(255,255,255,0.35)',
 };
 const secondaryBtn: React.CSSProperties = {
-  background: 'rgba(10,10,36,0.7)', border: '1.5px solid #c8a030',
-  borderRadius: 8, color: '#f0e0b0', fontSize: 14, padding: '10px 18px', cursor: 'pointer',
+  background: 'linear-gradient(180deg, rgba(34,32,72,0.9), rgba(10,10,30,0.9))', border: '1.5px solid #c8a030',
+  borderRadius: 9, color: '#f0e0b0', fontSize: 14, padding: '10px 18px', cursor: 'pointer',
   fontFamily: '"Noto Sans JP", sans-serif',
+  boxShadow: '0 3px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)',
 };
 const smallBtn: React.CSSProperties = {
-  marginTop: 6, background: 'rgba(10,10,36,0.8)', border: '1px solid #6a4a4a',
-  borderRadius: 6, color: '#d09090', fontSize: 11, padding: '3px 10px', cursor: 'pointer',
+  marginTop: 6, background: 'linear-gradient(180deg, rgba(60,24,24,0.9), rgba(24,10,10,0.9))', border: '1px solid #7a5050',
+  borderRadius: 6, color: '#e0a0a0', fontSize: 11, padding: '3px 10px', cursor: 'pointer',
 };
 const cpuLvBtn: React.CSSProperties = {
-  background: 'rgba(20,40,80,0.8)', border: '1px solid #4a78c8',
-  borderRadius: 6, color: '#a0d0ff', fontSize: 12, padding: '4px 8px', cursor: 'pointer',
+  background: 'linear-gradient(180deg, rgba(30,56,108,0.9), rgba(14,28,60,0.9))', border: '1px solid #4a78c8',
+  borderRadius: 6, color: '#b8dcff', fontSize: 12, fontWeight: 700, padding: '4px 9px', cursor: 'pointer',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
 };
