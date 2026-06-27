@@ -188,26 +188,33 @@ export function AdminPanelMinimal() {
   }
 
   // ── Maintenance ──
+  const maintenanceApi = async (body: Record<string, unknown>): Promise<any> => {
+    const res = await fetch('/api/admin-maintenance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey: ADMIN_KEY, ...body }),
+    })
+    return res.json()
+  }
+
   const loadMaintenance = useCallback(async () => {
     setMLoading(true)
-    const [{ data: winData }, { data: msgData }] = await Promise.all([
-      db.from('suiga_system_config').select('value').eq('key', 'maintenance_windows').single(),
-      db.from('suiga_system_config').select('value').eq('key', 'maintenance_message').single(),
-    ])
-    if (winData) setWindows((winData.value ?? []) as MaintenanceWindow[])
-    if (msgData?.value) {
-      const v = msgData.value as { heading?: string; lead?: string; note?: string }
-      if (v.heading != null) setMHeading(v.heading)
-      if (v.lead    != null) setMLead(v.lead)
-      if (v.note    != null) setMNote(v.note)
-    }
+    try {
+      const j = await maintenanceApi({ action: 'load' })
+      if (j.windows) setWindows(j.windows as MaintenanceWindow[])
+      if (j.message) {
+        const v = j.message as { heading?: string; lead?: string; note?: string }
+        if (v.heading != null) setMHeading(v.heading)
+        if (v.lead    != null) setMLead(v.lead)
+        if (v.note    != null) setMNote(v.note)
+      }
+    } catch { /* ignore */ }
     setMLoading(false)
-  }, [db])
+  }, [])
 
   const saveMaintenance = async () => {
     setMSaving(true); setMMsg('')
-    const { error } = await db.from('suiga_system_config').upsert({ key: 'maintenance_windows', value: windows, updated_at: new Date().toISOString() })
-    setMMsg(error ? `エラー: ${error.message}` : '保存しました ✓')
+    const j = await maintenanceApi({ action: 'save_windows', windows })
+    setMMsg(j.error ? `エラー: ${j.error}` : '保存しました ✓')
     setMSaving(false)
   }
 
@@ -221,8 +228,8 @@ export function AdminPanelMinimal() {
 
   const saveMaintenanceMessage = async () => {
     setMMsgSaving(true); setMMsgResult('')
-    const { error } = await db.from('suiga_system_config').upsert({ key: 'maintenance_message', value: { heading: mHeading, lead: mLead, note: mNote }, updated_at: new Date().toISOString() })
-    setMMsgResult(error ? `エラー: ${error.message}` : '保存しました ✓')
+    const j = await maintenanceApi({ action: 'save_message', heading: mHeading, lead: mLead, note: mNote })
+    setMMsgResult(j.error ? `エラー: ${j.error}` : '保存しました ✓')
     setMMsgSaving(false)
   }
 
