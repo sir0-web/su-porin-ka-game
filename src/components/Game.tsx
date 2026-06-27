@@ -13,24 +13,35 @@ import { rrect, hexA, buildSprite, type Sprite } from '@/lib/sprites';
 const W = 488;                  // canvas matches the decorative frame (frame.png) 2:3 aspect
 const WALL = 14;
 const H = 732;
-// Play field aligned to the frame.png opening so blocks sit inside the border.
-const CEILING_Y = 145;          // danger line ≈ frame opening top
-const FLOOR_Y = 608;            // floor ≈ frame opening bottom (gem ornament erased)
-const BHUD_Y = FLOOR_Y + WALL;  // (legacy; unused with the frame skin)
-const DROP_Y = 96;              // aim piece sits above the danger line in the frame's top arch
-const GL = 83;                  // frame opening left
-const GR = 410;                 // frame opening right
+
+// Frame zoom: enlarge the whole frame uniformly (X & Y by the same ratio) so
+// the opening occupies more of the canvas → blocks reclaim screen width like
+// before the frame was added. Uniform scaling keeps the art undistorted
+// (circles stay round); only the outermost decorative edge is cropped a little.
+const FRAME_ZOOM = 1.15;
+const FZ_CX = W / 2;
+const FZ_CY = H / 2;
+const zx = (x: number) => FZ_CX + (x - FZ_CX) * FRAME_ZOOM;
+const zy = (y: number) => FZ_CY + (y - FZ_CY) * FRAME_ZOOM;
+
+// Play field aligned to the (zoomed) frame.png opening so blocks sit inside the border.
+const CEILING_Y = Math.round(zy(145));   // danger line ≈ frame opening top
+const FLOOR_Y = Math.round(zy(608));     // floor ≈ frame opening bottom
+const BHUD_Y = FLOOR_Y + WALL;           // (legacy; unused with the frame skin)
+const DROP_Y = Math.round(zy(96));       // aim piece sits above the danger line
+const GL = Math.round(zx(83));           // frame opening left
+const GR = Math.round(zx(410));          // frame opening right
 const GW = GR - GL;
 const CX = W / 2;
 const DROP_COOLDOWN = 550;
 
 // ── Decorative frame skin (overlaid during play) ───────────────
 const FRAME_SRC = '/frame.png';
-// HUD anchor points within the frame, as px in the W×H canvas.
+// HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
-  nextX:  0.250 * W, nextY: 0.140 * H, nextLabelY: 0.092 * H,
-  bestX:  0.262 * W, scoreX: 0.498 * W, evoX: 0.740 * W,
-  labelY: 0.852 * H, valueY: 0.892 * H,  // value sits centred in the plate
+  nextX:  zx(0.250 * W), nextY: zy(0.140 * H), nextLabelY: zy(0.092 * H),
+  bestX:  zx(0.262 * W), scoreX: zx(0.498 * W), evoX: zx(0.740 * W),
+  labelY: zy(0.852 * H), valueY: zy(0.892 * H),  // value sits centred in the plate
 };
 
 // ─── Palette ───────────────────────────────────────────────────
@@ -2102,8 +2113,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       drawParticles(ctx, !isPausedRef.current);
 
       if (useFrame) {
-        // decorative frame on top of the field, then live values in its plates
-        ctx.drawImage(frameImgRef.current as HTMLImageElement, 0, 0, W, H);
+        // decorative frame on top of the field (uniformly zoomed about centre),
+        // then live values in its plates
+        ctx.drawImage(
+          frameImgRef.current as HTMLImageElement,
+          zx(0), zy(0), W * FRAME_ZOOM, H * FRAME_ZOOM,
+        );
         drawCeiling(ctx);  // danger line drawn over frame skin
         drawLiveHUD(ctx, s);
       } else {
@@ -2340,8 +2355,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           const soundOn = bgmOn && seOn;
           // The frame.png has three baked circles top-right; drop our buttons
           // into them (transparent, no border — the circle art is the button).
+          // Positions are given in raw (unzoomed) frame coords; map through the
+          // same uniform zoom so the buttons stay centred on the frame's circles.
           const circle = (cx: number, cy: number): React.CSSProperties => ({
-            position: 'absolute', left: cx - 16, top: cy - 16, width: 32, height: 32,
+            position: 'absolute', left: zx(cx) - 16, top: zy(cy) - 16, width: 32, height: 32,
             background: 'transparent', border: 'none', color: '#fff8e0', fontSize: 16,
             cursor: 'pointer', zIndex: 5, display: 'flex', alignItems: 'center',
             justifyContent: 'center', padding: 0, lineHeight: '1',
