@@ -189,11 +189,15 @@ export function AdminPanelMinimal() {
 
   // ── Maintenance ──
   const maintenanceApi = async (body: Record<string, unknown>): Promise<any> => {
-    const res = await fetch('/api/admin-maintenance', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminKey: ADMIN_KEY, ...body }),
-    })
-    return res.json()
+    try {
+      const res = await fetch('/api/admin-maintenance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, ...body }),
+      })
+      return await res.json()
+    } catch (e) {
+      return { error: String(e) }
+    }
   }
 
   const loadMaintenance = useCallback(async () => {
@@ -214,7 +218,7 @@ export function AdminPanelMinimal() {
   const saveMaintenance = async () => {
     setMSaving(true); setMMsg('')
     const j = await maintenanceApi({ action: 'save_windows', windows })
-    setMMsg(j.error ? `エラー: ${j.error}` : '保存しました ✓')
+    setMMsg(j?.error ? `エラー: ${j.error}` : '保存しました ✓')
     setMSaving(false)
   }
 
@@ -229,7 +233,7 @@ export function AdminPanelMinimal() {
   const saveMaintenanceMessage = async () => {
     setMMsgSaving(true); setMMsgResult('')
     const j = await maintenanceApi({ action: 'save_message', heading: mHeading, lead: mLead, note: mNote })
-    setMMsgResult(j.error ? `エラー: ${j.error}` : '保存しました ✓')
+    setMMsgResult(j?.error ? `エラー: ${j.error}` : '保存しました ✓')
     setMMsgSaving(false)
   }
 
