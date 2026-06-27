@@ -39,9 +39,9 @@ const FRAME_SRC  = '/frame.png';
 const FRAME2_SRC = '/frame2.png';
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
-  nextX:  zx(0.250 * W), nextY: zy(0.140 * H), nextLabelY: zy(0.092 * H),
-  bestX:  zx(0.262 * W), scoreX: zx(0.498 * W), evoX: zx(0.740 * W),
-  labelY: zy(0.852 * H), valueY: zy(0.892 * H),  // value sits centred in the plate
+  nextX:  zx(0.250 * W), nextY: zy(0.112 * H), nextLabelY: zy(0.072 * H),
+  bestX:  zx(0.225 * W), scoreX: zx(0.513 * W), evoX: zx(0.786 * W),
+  labelY: zy(0.907 * H), valueY: zy(0.948 * H),
 };
 // Option-button circles baked into the frame (raw canvas coords; pass through
 // zx/zy at use). The icons are drawn ON the canvas and taps are hit-tested in
@@ -2168,9 +2168,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       ctx.clearRect(0, 0, W, H);
       const useFrame  = frameReadyRef.current  && frameImgRef.current;
       const useFrame2 = frame2ReadyRef.current && frame2ImgRef.current;
-      // frame2: opaque base layer (golden background + borders + white inner area)
-      if (useFrame2) ctx.drawImage(frame2ImgRef.current as HTMLImageElement, 0, 0, W, H);
-      drawBG(ctx);                 // dark veil/grid inside play field (covers frame2's white centre)
+      drawBG(ctx);                 // dark veil/grid inside play field
       if (!useFrame && !useFrame2) { drawWalls(ctx); drawCeiling(ctx); }
 
       // Pulse factor for the danger outline (visibility)
@@ -2212,10 +2210,11 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       drawParticles(ctx, !isPausedRef.current);
 
       if (useFrame2) {
-        // frame2 border on top: clip out the inner play field so monsters show through
+        // frame2 border on top: evenodd clip draws frame everywhere EXCEPT inner play field.
+        // Outer rect (x=28..531) excludes frame2's narrow outer white margins → page bg shows.
         ctx.save();
         ctx.beginPath();
-        ctx.rect(0, 0, W, H);
+        ctx.rect(28, 0, 503, H);
         ctx.rect(GL, CEILING_Y, GW, FLOOR_Y - CEILING_Y);
         ctx.clip('evenodd');
         ctx.drawImage(frame2ImgRef.current as HTMLImageElement, 0, 0, W, H);
