@@ -192,12 +192,13 @@ const NAME_INPUT_H   = 40;
 const TITLE_DIV_Y    = 296;  // rich rule in the gap between title and the rest
 const NAME_DIV_Y     = 406;  // rule below the player-name input
 
-// All TOP buttons share the same (slightly larger) size
-const MENU_START_BTN  = { w: 288, h: 60, x: CX - 144, y: 414 };
-const MENU_BATTLE_BTN = { w: 288, h: 60, x: CX - 144, y: 476 };
-const MENU_RANK_BTN   = { w: 288, h: 60, x: CX - 144, y: 538 };
-const MENU_SET_BTN    = { w: 288, h: 60, x: CX - 144, y: 600 };
-const MENU_HOW_BTN    = { w: 288, h: 60, x: CX - 144, y: 662 };
+// All TOP buttons share the same size (h=52 to fit 6 buttons within H=732)
+const MENU_START_BTN  = { w: 288, h: 52, x: CX - 144, y: 410 };
+const MENU_BATTLE_BTN = { w: 288, h: 52, x: CX - 144, y: 464 };
+const MENU_RANK_BTN   = { w: 288, h: 52, x: CX - 144, y: 518 };
+const MENU_REPORT_BTN = { w: 288, h: 52, x: CX - 144, y: 572 };
+const MENU_SET_BTN    = { w: 288, h: 52, x: CX - 144, y: 626 };
+const MENU_HOW_BTN    = { w: 288, h: 52, x: CX - 144, y: 680 };
 // In-game / game-over button rects
 const GO_BTN = { w: 324, h: 46, x: CX - 162, y: 500 };         // retry (primary, full width)
 const GO_TOP_BTN = { w: 102, h: 40, x: CX - 162, y: 558 };     // back to TOP menu
@@ -249,8 +250,13 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
   const [bgmOn, setBgmOn]   = useState(true);
   const [seOn,  setSeOn]    = useState(true);
-  const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto' | 'confirmTop'>(null);
-  const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto' | 'confirmTop'>(null);
+  const [modal, setModal]   = useState<null | 'ranking' | 'settings' | 'howto' | 'confirmTop' | 'report'>(null);
+  const modalRef            = useRef<null | 'ranking' | 'settings' | 'howto' | 'confirmTop' | 'report'>(null);
+  const [reportName, setReportName]         = useState('');
+  const [reportCategory, setReportCategory] = useState('不具合報告');
+  const [reportContent, setReportContent]   = useState('');
+  const [reportSending, setReportSending]   = useState(false);
+  const [reportResult, setReportResult]     = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
   const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
@@ -1636,9 +1642,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       ctx.shadowBlur = 0;
     }
 
-    menuBtn(MENU_RANK_BTN,  '🏆  ランキング', false);
-    menuBtn(MENU_SET_BTN,   '⚙  セッティング', false);
-    menuBtn(MENU_HOW_BTN,   '📖  遊び方', false);
+    menuBtn(MENU_RANK_BTN,    '🏆  ランキング', false);
+    menuBtn(MENU_REPORT_BTN, '📢  報告・要望', false);
+    menuBtn(MENU_SET_BTN,    '⚙  セッティング', false);
+    menuBtn(MENU_HOW_BTN,    '📖  遊び方', false);
 
     // Sound toggle (TOP screen) — canvas-drawn with a backing disc; tapped via
     // the canvas hit-test (no HTML button, so no mobile scaling drift).
@@ -2325,7 +2332,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const rect = canvas.getBoundingClientRect();
       return (clientX - rect.left) / scaleRef.current;
     };
-    const MENU_BTNS = [MENU_START_BTN, MENU_BATTLE_BTN, MENU_RANK_BTN, MENU_SET_BTN, MENU_HOW_BTN];
+    const MENU_BTNS = [MENU_START_BTN, MENU_BATTLE_BTN, MENU_RANK_BTN, MENU_REPORT_BTN, MENU_SET_BTN, MENU_HOW_BTN];
     const onMove  = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const s = scaleRef.current;
@@ -2390,6 +2397,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         onBattle?.();
       } else if (inBtn(MENU_RANK_BTN)) {
         modalRef.current = 'ranking'; setModal('ranking');
+      } else if (inBtn(MENU_REPORT_BTN)) {
+        setReportName(playerNameRef.current);
+        setReportCategory('不具合報告');
+        setReportContent('');
+        setReportResult('');
+        modalRef.current = 'report'; setModal('report');
       } else if (inBtn(MENU_SET_BTN)) {
         modalRef.current = 'settings'; setModal('settings');
       } else if (inBtn(MENU_HOW_BTN)) {
@@ -2664,6 +2677,105 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
                   </div>
                   <button style={closeBtn} onClick={closeModal}>閉じる</button>
                 </>)}
+
+                {modal === 'report' && (() => {
+                  const inputStyle: React.CSSProperties = {
+                    width: '100%', boxSizing: 'border-box',
+                    padding: '7px 10px',
+                    background: 'rgba(4,4,20,0.9)',
+                    border: '1px solid #6a4a20',
+                    borderRadius: 6,
+                    color: '#f0e0b0', fontSize: 13,
+                    fontFamily: '"Noto Sans JP", sans-serif',
+                  };
+                  const labelStyle: React.CSSProperties = {
+                    display: 'block', fontSize: 11, color: '#c8a030', marginBottom: 4,
+                  };
+                  const sendReport = async () => {
+                    if (!reportContent.trim()) return;
+                    setReportSending(true);
+                    try {
+                      const res = await fetch('/api/report', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          category: reportCategory,
+                          content: reportContent,
+                          player_name: reportName || null,
+                        }),
+                      });
+                      const json = await res.json();
+                      setReportResult(json.ok ? '送信しました！ありがとうございます 🙏' : `エラー: ${json.error ?? 'unknown'}`);
+                    } catch (e) {
+                      setReportResult(`エラー: ${String(e)}`);
+                    }
+                    setReportSending(false);
+                  };
+                  return (<>
+                    <h2 style={h2Style}>📢 報告・要望</h2>
+                    {reportResult ? (
+                      <div style={{ textAlign: 'center', lineHeight: 1.8, marginBottom: 8 }}>
+                        <p style={{ color: reportResult.startsWith('エラー') ? '#f87171' : '#86efac', fontSize: 13 }}>
+                          {reportResult}
+                        </p>
+                        <button style={closeBtn} onClick={() => { setReportResult(''); }}>もう一件送る</button>
+                        <button style={{ ...closeBtn, marginTop: 8 }} onClick={() => { modalRef.current = null; setModal(null); }}>閉じる</button>
+                      </div>
+                    ) : (<>
+                      <div style={{ marginBottom: 10 }}>
+                        <label style={labelStyle}>お名前（任意）</label>
+                        <input
+                          style={inputStyle}
+                          value={reportName}
+                          onChange={e => setReportName(e.target.value)}
+                          maxLength={64}
+                          placeholder="プレイヤー名"
+                        />
+                      </div>
+                      <div style={{ marginBottom: 10 }}>
+                        <label style={labelStyle}>カテゴリ</label>
+                        <select
+                          style={inputStyle}
+                          value={reportCategory}
+                          onChange={e => setReportCategory(e.target.value)}
+                        >
+                          <option value="不具合報告">不具合報告</option>
+                          <option value="要望">要望</option>
+                          <option value="質問">質問</option>
+                          <option value="その他">その他</option>
+                        </select>
+                      </div>
+                      <div style={{ marginBottom: 14 }}>
+                        <label style={labelStyle}>内容</label>
+                        <textarea
+                          style={{ ...inputStyle, height: 100, resize: 'none' }}
+                          value={reportContent}
+                          onChange={e => setReportContent(e.target.value)}
+                          maxLength={2000}
+                          placeholder="詳しく教えてください…"
+                        />
+                      </div>
+                      <button
+                        style={{
+                          display: 'block', width: '100%',
+                          padding: '9px 0',
+                          background: reportContent.trim() ? 'linear-gradient(180deg,#5a2a00,#c87020,#5a2a00)' : 'rgba(30,30,50,0.8)',
+                          border: `1.5px solid ${reportContent.trim() ? '#ffe050' : '#3a3a60'}`,
+                          borderRadius: 8,
+                          color: reportContent.trim() ? '#fffadc' : '#6a6a90',
+                          fontSize: 13, cursor: reportContent.trim() ? 'pointer' : 'default',
+                          fontFamily: '"Noto Sans JP", sans-serif',
+                          fontWeight: 700,
+                        }}
+                        onClick={() => void sendReport()}
+                        disabled={reportSending || !reportContent.trim()}
+                      >
+                        {reportSending ? '送信中…' : '📤 送信する'}
+                      </button>
+                      <button style={closeBtn} onClick={() => { modalRef.current = null; setModal(null); }}>閉じる</button>
+                    </>)}
+                  </>);
+                })()}
 
                 {modal === 'confirmTop' && (<>
                   <h2 style={h2Style}>🏠 TOPに戻りますか？</h2>
