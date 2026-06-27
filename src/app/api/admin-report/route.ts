@@ -19,6 +19,16 @@ export async function POST(req: NextRequest) {
   const db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
 
   try {
+    if (action === 'list') {
+      const { status, category } = body ?? {}
+      let q = db.from('suiga_reports').select('*').order('created_at', { ascending: false }).limit(300)
+      if (status) q = q.eq('status', status)
+      if (category) q = q.eq('category', category)
+      const { data, error } = await q
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ rows: data ?? [] })
+    }
+
     if (action === 'set_status') {
       const id = Number(body?.id)
       const status = body?.status

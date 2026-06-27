@@ -369,15 +369,18 @@ export function AdminPanelMinimal() {
   // ── Reports ──
   const loadReports = useCallback(async (statusF = '', catF = '') => {
     setRepLoading(true); setRepMsg('')
-    let q = db.from('suiga_reports').select('*').order('created_at', { ascending: false }).limit(300)
-    if (statusF) q = q.eq('status', statusF)
-    if (catF) q = q.eq('category', catF)
-    const { data, error } = await q
-    if (error) setRepMsg(`エラー: ${error.message}`)
-    setReports((data ?? []) as Report[])
+    try {
+      const res = await fetch('/api/admin-report', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'list', status: statusF || undefined, category: catF || undefined }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) { setRepMsg(`エラー: ${json.error ?? res.status}`); setRepLoading(false); return }
+      setReports((json.rows ?? []) as Report[])
+    } catch (e) { setRepMsg(`エラー: ${String(e)}`) }
     setRepSelected(new Set())
     setRepLoading(false)
-  }, [db])
+  }, [])
 
   // 報告のステータス更新・削除は service key 経由のAPIで行う（reportsはanon更新/削除をRLSで弾くため）
   const reportApi = async (body: Record<string, unknown>): Promise<{ ok?: boolean; deleted?: number; error?: string }> => {
