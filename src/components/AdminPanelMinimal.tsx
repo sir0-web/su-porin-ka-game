@@ -479,7 +479,7 @@ export function AdminPanelMinimal() {
   const fireSkulporin = async () => {
     if (!confirm('すかるぽりんを全プレイヤーに強制出現させますか？')) return
     const ok = await postEvent({ action: 'skulporin' })
-    if (ok) window.triggerSkulporinCheck?.()
+    if (ok) setEvMsg('送信しました ✓')
   }
 
 
