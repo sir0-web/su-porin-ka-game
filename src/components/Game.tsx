@@ -14,11 +14,10 @@ const W = 488;                  // canvas matches the decorative frame (frame.pn
 const WALL = 14;
 const H = 732;
 
-// Frame zoom: enlarge the whole frame uniformly (X & Y by the same ratio) so
-// the opening occupies more of the canvas → blocks reclaim screen width like
-// before the frame was added. Uniform scaling keeps the art undistorted
-// (circles stay round); only the outermost decorative edge is cropped a little.
-const FRAME_ZOOM = 1.15;
+// Frame zoom: a uniform scale of the whole frame about the canvas centre.
+// 1.0 = draw the frame.png exactly into the canvas (complete, undistorted,
+// no cropping of the outer decorative border — matches the natural look).
+const FRAME_ZOOM = 1.0;
 const FZ_CX = W / 2;
 const FZ_CY = H / 2;
 const zx = (x: number) => FZ_CX + (x - FZ_CX) * FRAME_ZOOM;
@@ -1535,6 +1534,26 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
     ctx.restore();
 
+    // Player-name input BOX + text drawn on canvas (the editable field is a
+    // fully transparent HTML overlay on top). Drawing the visible box here means
+    // it always lines up with the menu buttons, immune to mobile form-control
+    // scaling quirks (e.g. it looked wider/offset in portrait before).
+    {
+      const bx = MENU_START_BTN.x, bw = MENU_START_BTN.w;
+      const by = NAME_INPUT_TOP, bh = NAME_INPUT_H;
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      rrect(ctx, bx, by, bw, bh, 6); ctx.fill();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      rrect(ctx, bx, by, bw, bh, 6); ctx.stroke();
+      const val = playerNameRef.current.trim();
+      ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = val ? '#ffffff' : 'rgba(255,255,255,0.45)';
+      ctx.fillText(val || 'ぼうけんしゃ', bx + bw / 2, by + bh / 2 + 1);
+      ctx.restore();
+    }
+
     menuBtn(MENU_START_BTN, '⚔  ゲームスタート  ⚔', true);
 
     // 対戦モード — distinct purple gradient so it stands out
@@ -2402,7 +2421,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             type="text"
             value={playerNameInput}
             maxLength={10}
-            placeholder="ぼうけんしゃ"
+            placeholder=""
             onChange={(e) => {
               const v = e.target.value;
               setPlayerNameInput(v);
@@ -2415,19 +2434,21 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
               left: MENU_START_BTN.x,
               width: MENU_START_BTN.w,
               height: NAME_INPUT_H,
-              // RPG-style: semi-transparent black bg (image faintly shows), white border/text
-              background: 'rgba(0,0,0,0.5)',
-              border: '2px solid #ffffff',
-              borderRadius: 6,
-              color: '#ffffff',
-              fontSize: 15,
+              // Transparent overlay: the visible box + text are drawn on the
+              // canvas (always aligned with the buttons). This field only
+              // captures focus/typing, so any mobile form-control sizing quirk
+              // no longer affects the on-screen layout.
+              background: 'transparent',
+              border: 'none',
+              color: 'transparent',
+              caretColor: '#ffffff',
+              fontSize: 16,           // ≥16px avoids iOS auto-zoom on focus
               fontWeight: 700,
-              letterSpacing: 1,
               textAlign: 'center',
               outline: 'none',
               fontFamily: '"Noto Sans JP", sans-serif',
-              boxShadow: '0 0 0 1px #000, 0 0 8px rgba(255,255,255,0.25)',
               boxSizing: 'border-box',
+              WebkitTextSizeAdjust: '100%',
               zIndex: 5,
             }}
           />
