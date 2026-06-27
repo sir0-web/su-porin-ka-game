@@ -42,6 +42,15 @@ const FA = {
   bestX:  zx(0.262 * W), scoreX: zx(0.498 * W), evoX: zx(0.740 * W),
   labelY: zy(0.852 * H), valueY: zy(0.892 * H),  // value sits centred in the plate
 };
+// Option-button circles baked into the frame (raw canvas coords; pass through
+// zx/zy at use). The icons are drawn ON the canvas and taps are hit-tested in
+// the canvas handler — HTML <button>s mis-scaled inside the transformed
+// wrapper on mobile (icons drifted outside their circles).
+const OPT_EGG   = { x: 331, y: 70 };
+const OPT_SND   = { x: 366, y: 70 };
+const OPT_PAUSE = { x: 402, y: 70 };
+const OPT_R = 17;                        // icon font / hit radius
+const OPT_SND_START = { x: W - 28, y: 30 }; // sound toggle on the TOP screen
 
 // ─── Palette ───────────────────────────────────────────────────
 const P = {
@@ -971,6 +980,27 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
   }, [drawMonster, drawNameText]);
 
+  // Draw one option icon (🥚 / 🔊 / ⏸) at a frame circle. The circle art is in
+  // the frame.png; we only paint the emoji (plus an optional backing disc when
+  // there's no frame circle behind it, e.g. on the TOP screen).
+  const drawOptionIcon = useCallback((
+    ctx: CanvasRenderingContext2D, cx: number, cy: number, emoji: string, disc = false,
+  ) => {
+    const x = zx(cx), y = zy(cy);
+    ctx.save();
+    if (disc) {
+      ctx.fillStyle = 'rgba(8,8,28,0.62)';
+      ctx.beginPath(); ctx.arc(x, y, OPT_R + 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(200,160,48,0.75)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, OPT_R + 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.font = `${OPT_R + 3}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 3;
+    ctx.fillText(emoji, x, y + 1);
+    ctx.restore();
+  }, []);
+
   // 4-pointed sparkle star path
   const star4 = useCallback((ctx: CanvasRenderingContext2D, x: number, y: number, R: number) => {
     const ri = R * 0.34;
@@ -1584,7 +1614,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     menuBtn(MENU_RANK_BTN,  '🏆  ランキング', false);
     menuBtn(MENU_SET_BTN,   '⚙  セッティング', false);
     menuBtn(MENU_HOW_BTN,   '📖  遊び方', false);
-  }, []);
+
+    // Sound toggle (TOP screen) — canvas-drawn with a backing disc; tapped via
+    // the canvas hit-test (no HTML button, so no mobile scaling drift).
+    drawOptionIcon(ctx, OPT_SND_START.x, OPT_SND_START.y,
+      (bgmOnRef.current && seOnRef.current) ? '🔊' : '🔇', true);
+  }, [drawOptionIcon]);
 
   // ── Game over screen ────────────────────────────────────────
   const drawGameOver = useCallback((ctx: CanvasRenderingContext2D, st: GS) => {
@@ -2162,10 +2197,21 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       if (isPausedRef.current && s.phase === 'playing') drawPauseOverlay(ctx);
 
+      // Option icons painted on top of everything (so they're tappable even
+      // over the pause/gameover overlays). Taps are handled in handleClick.
+      if (useFrame) {
+        const soundOn = bgmOnRef.current && seOnRef.current;
+        if (s.phase === 'playing') {
+          drawOptionIcon(ctx, OPT_EGG.x, OPT_EGG.y, '🥚');
+          drawOptionIcon(ctx, OPT_PAUSE.x, OPT_PAUSE.y, isPausedRef.current ? '▶️' : '⏸️');
+        }
+        drawOptionIcon(ctx, OPT_SND.x, OPT_SND.y, soundOn ? '🔊' : '🔇');
+      }
+
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawLiveHUD, drawGameOver, drawBoardView, drawPopups, drawParticles, drawSecretFx, drawPauseOverlay, handleMerge, syncBgm, stopFall]);
+  }, [drawBG, drawWalls, drawCeiling, drawMonster, drawHUD, drawLiveHUD, drawGameOver, drawBoardView, drawPopups, drawParticles, drawSecretFx, drawPauseOverlay, drawOptionIcon, handleMerge, syncBgm, stopFall]);
 
   // ── Preload + preprocess monster images ─────────────────────
   useEffect(() => {
@@ -2228,13 +2274,13 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const wrap = wrapRef.current;
       if (!wrap) return;
       // Fit the board to BOTH the available width and height, and allow
-      // it to grow beyond 1× (using the space freed by removing the header).
-      // Push the board down from the very top so it isn't "too high"; reserve
-      // that offset (plus the footer) in the height budget so nothing is cut.
+      // it to grow beyond 1×. Reserve room for the 🏠 button above the board
+      // (TOP_OFFSET) and a slim bottom margin so the board sits a touch larger
+      // ("一回り大きく") while keeping its fixed 2:3 aspect.
       const TOP_OFFSET = 44;
-      const availW = (wrap.parentElement?.clientWidth ?? window.innerWidth) - 8;
-      const availH = window.innerHeight - 52 - TOP_OFFSET;
-      const s = Math.max(0.2, Math.min(availW / W, availH / H, 2.2));
+      const availW = (wrap.parentElement?.clientWidth ?? window.innerWidth) - 4;
+      const availH = window.innerHeight - 16 - TOP_OFFSET;
+      const s = Math.max(0.2, Math.min(availW / W, availH / H, 2.6));
       scaleRef.current = s;
       wrap.style.transform       = `scale(${s})`;
       wrap.style.transformOrigin = 'top center';
@@ -2293,6 +2339,16 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
     const inBtn = (b: { x: number; y: number; w: number; h: number }) =>
       cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+    // Hit-test a frame option circle (canvas coords, zoom-aware).
+    const inCircle = (c: { x: number; y: number }) => {
+      const dx = cx - zx(c.x), dy = cy - zy(c.y);
+      return dx * dx + dy * dy <= (OPT_R + 6) * (OPT_R + 6);
+    };
+    const toggleSound = () => {
+      unlockAudio();
+      const v = !(bgmOnRef.current && seOnRef.current);
+      setBgmOn(v); setSeOn(v);
+    };
 
     if (st.phase === 'start') {
       // Unlock BGM on first interaction (browser autoplay policy)
@@ -2300,6 +2356,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         bgmRef.current.play().catch(() => {});
       }
       if (modalRef.current !== null) return;
+      if (inCircle(OPT_SND_START)) { toggleSound(); return; }
       if (inBtn(MENU_START_BTN)) {
         cancelAnimationFrame(rafRef.current);
         await initGame();
@@ -2314,6 +2371,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         modalRef.current = 'howto'; setModal('howto');
       }
     } else if (st.phase === 'gameover') {
+      if (inCircle(OPT_SND)) { toggleSound(); return; }
       if (viewingRef.current) {
         // gazing at the final board
         if (inBtn(GO_BACK_BTN)) viewingRef.current = false;
@@ -2329,9 +2387,14 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         saveScreenshot();
       }
     } else {
+      // playing — option circles first, otherwise drop
+      if (inCircle(OPT_EGG)) { openEvolution(); return; }
+      if (inCircle(OPT_PAUSE)) { togglePause(); return; }
+      if (inCircle(OPT_SND)) { toggleSound(); return; }
+      if (isPausedRef.current) return;  // don't drop while paused
       drop();
     }
-  }, [initGame, drop, saveScreenshot, unlockAudio, goToTop, onBattle]);
+  }, [initGame, drop, saveScreenshot, unlockAudio, goToTop, onBattle, openEvolution, togglePause]);
 
   return (
     <div style={{ width: '100%', display: 'flex', justifyContent: 'center', overflowX: 'hidden' }}>
@@ -2371,37 +2434,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             padding: 0,
             lineHeight: '1',
           };
-          const soundOn = bgmOn && seOn;
-          // The frame.png has three baked circles top-right; drop our buttons
-          // into them (transparent, no border — the circle art is the button).
-          // Positions are given in raw (unzoomed) frame coords; map through the
-          // same uniform zoom so the buttons stay centred on the frame's circles.
-          const circle = (cx: number, cy: number): React.CSSProperties => ({
-            position: 'absolute', left: zx(cx) - 16, top: zy(cy) - 16, width: 32, height: 32,
-            background: 'transparent', border: 'none', color: '#fff8e0', fontSize: 16,
-            cursor: 'pointer', zIndex: 5, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', padding: 0, lineHeight: '1',
-            textShadow: '0 1px 3px rgba(0,0,0,0.7)',
-          });
+          // NOTE: the 進化順 / サウンド / 一時停止 options are now drawn on the
+          // canvas (in the frame's circles) and tapped via the canvas hit-test
+          // in handleClick — HTML buttons mis-scaled on mobile and drifted out
+          // of their circles. Only the 🏠 text button remains as HTML here.
           return (
             <>
-              {/* 進化順（卵） — 左の丸（ゲーム中のみ） */}
-              {uiPhase === 'playing' && (
-                <button style={circle(331, 70)} onClick={openEvolution} title="進化順を見る">🥚</button>
-              )}
-              {/* サウンドON/OFF — 中央の丸（全フェーズ） */}
-              <button
-                style={circle(366, 70)}
-                onClick={() => { unlockAudio(); const v = !(bgmOn && seOn); setBgmOn(v); setSeOn(v); }}
-              >
-                {soundOn ? '🔊' : '🔇'}
-              </button>
-              {/* 一時停止 — 右の丸（ゲーム中のみ） */}
-              {uiPhase === 'playing' && (
-                <button style={circle(402, 70)} onClick={togglePause}>
-                  {isPaused ? '▶' : '⏸'}
-                </button>
-              )}
               {/* TOPに戻る（ゲーム中のみ・確認あり）— 盤面の枠の外（上）に配置 */}
               {uiPhase === 'playing' && (
                 <button
