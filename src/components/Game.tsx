@@ -980,24 +980,49 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
   }, [drawMonster, drawNameText]);
 
-  // Draw one option icon (🥚 / 🔊 / ⏸) at a frame circle. The circle art is in
-  // the frame.png; we only paint the emoji (plus an optional backing disc when
-  // there's no frame circle behind it, e.g. on the TOP screen).
+  // Draw one option icon at a frame circle.
+  // Pause/play are drawn as geometric shapes (cross-platform reliable).
+  // Emoji icons get explicit globalAlpha=1 + white fillStyle so they render
+  // correctly on PC even when a previous draw left globalAlpha or fillStyle dirty.
   const drawOptionIcon = useCallback((
-    ctx: CanvasRenderingContext2D, cx: number, cy: number, emoji: string, disc = false,
+    ctx: CanvasRenderingContext2D, cx: number, cy: number,
+    icon: string,   // '🥚' | '🔊' | '🔇' | 'PAUSE' | 'PLAY'
+    disc = false,
   ) => {
     const x = zx(cx), y = zy(cy);
     ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
     if (disc) {
       ctx.fillStyle = 'rgba(8,8,28,0.62)';
       ctx.beginPath(); ctx.arc(x, y, OPT_R + 4, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = 'rgba(200,160,48,0.75)'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(x, y, OPT_R + 4, 0, Math.PI * 2); ctx.stroke();
     }
-    ctx.font = `${OPT_R + 3}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 3;
-    ctx.fillText(emoji, x, y + 1);
+    if (icon === 'PAUSE') {
+      // Two white vertical bars
+      const bw = 4, bh = 13, gap = 5;
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 3;
+      ctx.fillRect(x - gap / 2 - bw, y - bh / 2, bw, bh);
+      ctx.fillRect(x + gap / 2,       y - bh / 2, bw, bh);
+    } else if (icon === 'PLAY') {
+      // White right-pointing triangle
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - 6, y - 8);
+      ctx.lineTo(x + 9, y);
+      ctx.lineTo(x - 6, y + 8);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.font = `${OPT_R + 3}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 3;
+      ctx.fillText(icon, x, y + 1);
+    }
     ctx.restore();
   }, []);
 
@@ -2203,7 +2228,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         const soundOn = bgmOnRef.current && seOnRef.current;
         if (s.phase === 'playing') {
           drawOptionIcon(ctx, OPT_EGG.x, OPT_EGG.y, '🥚');
-          drawOptionIcon(ctx, OPT_PAUSE.x, OPT_PAUSE.y, isPausedRef.current ? '▶️' : '⏸️');
+          drawOptionIcon(ctx, OPT_PAUSE.x, OPT_PAUSE.y, isPausedRef.current ? 'PLAY' : 'PAUSE');
         }
         drawOptionIcon(ctx, OPT_SND.x, OPT_SND.y, soundOn ? '🔊' : '🔇');
       }
