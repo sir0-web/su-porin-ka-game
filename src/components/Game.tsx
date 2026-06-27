@@ -27,7 +27,7 @@ const zy = (y: number) => FZ_CY + (y - FZ_CY) * FRAME_ZOOM;
 const CEILING_Y = Math.round(zy(145));   // danger line ≈ frame opening top
 const FLOOR_Y = Math.round(zy(608));     // floor ≈ frame opening bottom
 const BHUD_Y = FLOOR_Y + WALL;           // (legacy; unused with the frame skin)
-const DROP_Y = Math.round(zy(96));       // aim piece sits above the danger line
+const DROP_Y = Math.round(zy(115));      // aim piece sits above the danger line (pushed down to reduce button overlap)
 const GL = Math.round(zx(83));           // frame opening left
 const GR = Math.round(zx(410));          // frame opening right
 const GW = GR - GL;
@@ -2227,10 +2227,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       if (useFrame) {
         const soundOn = bgmOnRef.current && seOnRef.current;
         if (s.phase === 'playing') {
-          drawOptionIcon(ctx, OPT_EGG.x, OPT_EGG.y, '🥚');
-          drawOptionIcon(ctx, OPT_PAUSE.x, OPT_PAUSE.y, isPausedRef.current ? 'PLAY' : 'PAUSE');
+          drawOptionIcon(ctx, OPT_EGG.x, OPT_EGG.y, '🥚', true);
+          drawOptionIcon(ctx, OPT_PAUSE.x, OPT_PAUSE.y, isPausedRef.current ? 'PLAY' : 'PAUSE', true);
         }
-        drawOptionIcon(ctx, OPT_SND.x, OPT_SND.y, soundOn ? '🔊' : '🔇');
+        drawOptionIcon(ctx, OPT_SND.x, OPT_SND.y, soundOn ? '🔊' : '🔇', true);
       }
 
       rafRef.current = requestAnimationFrame(loop);
