@@ -322,9 +322,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     playerIdRef.current = pid;
   }, []);
 
-  // Load the shared ranking once on mount (falls back to local on failure)
+  // Load the shared ranking once on mount (online only; localStorage is fallback on error)
   useEffect(() => {
-    rankingRef.current = loadRanking();
     fetchGlobalRanking().then((list) => {
       rankingRef.current = list;
       setRankingTick((t) => t + 1);
@@ -2191,14 +2190,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
               s.highScore = s.score;
               try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
             }
-            // Record this run in the ranking — show the local result
-            // immediately, then replace it with the shared online result
-            // once the submission resolves.
             const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
             const entry = { name, score: s.score, maxLevel: s.maxLevel, unknown: s.unknownCount, mergeCounts: [...s.mergeCounts], player_id: playerIdRef.current || undefined };
-            const local = insertRanking(entry);
-            rankingRef.current = local.list;
-            lastRankIdxRef.current = local.index;
+            lastRankIdxRef.current = -1;
             viewingRef.current = false;
             setUiPhase('gameover');
             submitGlobalRanking(entry).then(({ list, index }) => {
