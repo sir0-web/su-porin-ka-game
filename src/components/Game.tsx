@@ -39,7 +39,7 @@ const FRAME_SRC  = '/frame.png';
 const FRAME2_SRC = '/frame2_alpha.png'; // white pixels pre-processed to transparent
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
-  nextX:  zx(0.127 * W), nextY: zy(0.100 * H), nextLabelY: zy(0.048 * H),
+  nextX:  zx(0.159 * W), nextY: zy(0.118 * H), nextLabelY: zy(0.070 * H),
   bestX:  zx(0.225 * W), scoreX: zx(0.500 * W), evoX: zx(0.786 * W),
   labelY: zy(0.907 * H), valueY: zy(0.948 * H),
 };
@@ -1450,22 +1450,26 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const popFont = '900 52px "Hiragino Maru Gothic ProN", "Rounded Mplus 1c", "Noto Sans JP", system-ui, sans-serif';
       const lh = 58, baseY = 102;
       const now = Date.now();
+      // Find widest line → shared x0 so big acrostic chars align in a vertical column
+      ctx.font = popFont;
+      let _maxW = 0;
+      lines.forEach(([red, white]) => {
+        let _lw = ctx.measureText(red).width;
+        if (white) {
+          ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
+          _lw += 4 + ctx.measureText(white).width;
+          ctx.font = popFont;
+        }
+        if (_lw > _maxW) _maxW = _lw;
+      });
+      const x0 = Math.max(8, CX - _maxW / 2);
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       lines.forEach(([red, white], i) => {
         const by = baseY + i * lh;
         const c = pops[i % pops.length];
-        // Measure each line's total width to center it around CX
-        ctx.font = popFont;
-        const redW = ctx.measureText(red).width;
-        let lineW = redW;
-        if (white) {
-          ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
-          lineW += 4 + ctx.measureText(white).width;
-          ctx.font = popFont;
-        }
-        let x = Math.max(8, CX - lineW / 2);
+        let x = x0;
         ctx.font = popFont;
         ctx.lineJoin = 'round';
         const bob = Math.sin(now * 0.0024 + i * 0.8) * 3; // playful bounce
