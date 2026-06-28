@@ -90,9 +90,10 @@ interface GS {
   overLineFrames: number; // safety-net timer: frames with a body over the line
   maxLevel: number;       // highest monster level reached this game
   unknownCount: number;   // how many 知らない人 were created this game
+  mergeCounts: number[];  // per-level merge count for this game
 }
 
-interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; }
+interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; mergeCounts?: number[]; }
 
 // Ranking label for an entry's max evolution. Players who reached 知らない人
 // get it revealed with the number of times they created it (e.g. 知らない人＋3).
@@ -278,6 +279,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     overLineFrames: 0,
     maxLevel: 0,
     unknownCount: 0,
+    mergeCounts: new Array(11).fill(0),
   });
 
   const [uiPhase, setUiPhase] = useState<Phase>('start');

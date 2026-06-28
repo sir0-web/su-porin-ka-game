@@ -17,9 +17,9 @@ type Tab = 'maintenance' | 'message' | 'dm' | 'event' | 'ranking' | 'worldlog' |
 interface OnlinePlayer { player_id: string; player_name: string; floor: number; updated_at: string }
 
 interface MaintenanceWindow { from: number; to: number | null }
-interface RankingEntry { id: number; player_name: string; floor: number; level: number; created_at: string }
+interface RankingEntry { id: number; name: string; score: number; max_level: number; unknown_count: number; created_at: string }
 interface WorldNotif { id: number; type: string; title: string; message: string; player_name: string; created_at: string }
-interface EditingRanking { id: number; player_name: string; floor: number; level: number }
+interface EditingRanking { id: number; name: string; score: number; max_level: number }
 
 // active_sessions.state に保存されるプレイヤー状態スナップショット（心拍で同期）
 interface PlayerStateSnapshot {
@@ -112,12 +112,16 @@ export function AdminPanelMinimal() {
   const [rMsg, setRMsg]                   = useState('')
   const [editingRanking, setEditingRanking] = useState<EditingRanking | null>(null)
 
-  // ── World Log ──
+  // ── World Log (プレイログ) ──
   const [wlogs, setWlogs]     = useState<WorldNotif[]>([])
   const [wlLoading, setWlLoading] = useState(false)
   const [wlSearch, setWlSearch]   = useState('')
   const [wlType, setWlType]       = useState('')
   const [wlMsg, setWlMsg]         = useState('')
+
+  // ── Block stats (ブロック生涯合体回数) ──
+  const [blockMergeCounts, setBlockMergeCounts] = useState<number[]>(new Array(11).fill(0))
+  const [blockStatsLoading, setBlockStatsLoading] = useState(false)
 
   // ── User Management ──
   const [uSearch, setUSearch]     = useState('')
@@ -265,8 +269,8 @@ export function AdminPanelMinimal() {
   // ── Ranking ──
   const loadRankings = useCallback(async (search = '') => {
     setRLoading(true); setRMsg('')
-    let q = db.from('suiga_rankings').select('*').order('floor', { ascending: false }).limit(100)
-    if (search) q = q.ilike('player_name', `%${search}%`)
+    let q = db.from('suiga_rankings').select('*').order('score', { ascending: false }).limit(100)
+    if (search) q = q.ilike('name', `%${search}%`)
     const { data } = await q
     setRankings((data ?? []) as RankingEntry[])
     setRankSelected(new Set())
@@ -284,7 +288,7 @@ export function AdminPanelMinimal() {
 
   const saveEditRanking = async () => {
     if (!editingRanking) return
-    const { error } = await db.from('suiga_rankings').update({ player_name: editingRanking.player_name, floor: editingRanking.floor, level: editingRanking.level }).eq('id', editingRanking.id)
+    const { error } = await db.from('suiga_rankings').update({ name: editingRanking.name, score: editingRanking.score, max_level: editingRanking.max_level }).eq('id', editingRanking.id)
     if (error) { setRMsg(`更新エラー: ${error.message}`); return }
     setRMsg('更新しました ✓')
     setRankings(rs => rs.map(r => r.id === editingRanking.id ? { ...r, ...editingRanking } : r))
@@ -304,6 +308,29 @@ export function AdminPanelMinimal() {
     setWlLoading(false)
   }, [db])
 
+  const loadBlockStats = useCallback(async () => {
+    setBlockStatsLoading(true)
+    try {
+      // suiga_block_stats テーブルがあればそこから取得
+      const { data: bsData, error: bsErr } = await db.from('suiga_block_stats').select('monster_id, total_merges').order('monster_id')
+      if (!bsErr && bsData && bsData.length > 0) {
+        const counts = new Array(11).fill(0)
+        for (const row of bsData) {
+          const idx = Number(row.monster_id)
+          if (idx >= 0 && idx < 11) counts[idx] = Number(row.total_merges) || 0
+        }
+        setBlockMergeCounts(counts)
+      } else {
+        // フォールバック：suiga_rankings.unknown_count を集計（レベル10のみ）
+        const { data: rkData } = await db.from('suiga_rankings').select('unknown_count')
+        const counts = new Array(11).fill(0)
+        counts[10] = (rkData ?? []).reduce((s: number, r: { unknown_count: number }) => s + (Number(r.unknown_count) || 0), 0)
+        setBlockMergeCounts(counts)
+      }
+    } catch { /* ignore */ }
+    setBlockStatsLoading(false)
+  }, [db])
+
   const deleteWorldLog = async (id: number) => {
     if (!confirm('このワールドログを削除しますか？')) return
     const { deleted, error } = await adminDelete('suiga_world_notifications', [id])
@@ -320,7 +347,7 @@ export function AdminPanelMinimal() {
     const name = uSearch.trim()
     setUSearched(name)
     const [{ data: ranks }, { data: notifs }] = await Promise.all([
-      db.from('suiga_rankings').select('*').ilike('player_name', `%${name}%`).order('floor', { ascending: false }).limit(50),
+      db.from('suiga_rankings').select('*').ilike('name', `%${name}%`).order('score', { ascending: false }).limit(50),
       db.from('suiga_world_notifications').select('*').ilike('player_name', `%${name}%`).order('created_at', { ascending: false }).limit(100),
     ])
     setURankings((ranks ?? []) as RankingEntry[])
@@ -350,7 +377,7 @@ export function AdminPanelMinimal() {
 
   const saveUEditRanking = async () => {
     if (!uEditingRanking) return
-    const { error } = await db.from('suiga_rankings').update({ player_name: uEditingRanking.player_name, floor: uEditingRanking.floor, level: uEditingRanking.level }).eq('id', uEditingRanking.id)
+    const { error } = await db.from('suiga_rankings').update({ name: uEditingRanking.name, score: uEditingRanking.score, max_level: uEditingRanking.max_level }).eq('id', uEditingRanking.id)
     if (error) { setUMsg(`エラー: ${error.message}`); return }
     setUMsg('更新しました ✓')
     setURankings(rs => rs.map(r => r.id === uEditingRanking.id ? { ...r, ...uEditingRanking } : r))
@@ -637,12 +664,13 @@ export function AdminPanelMinimal() {
     if (!authed) return
     if (tab === 'maintenance') loadMaintenance()
     if (tab === 'ranking')     loadRankings()
-    if (tab === 'worldlog')    loadWorldLogs()
+    if (tab === 'worldlog')    { loadWorldLogs(); loadBlockStats() }
     if (tab === 'reports')     loadReports()
     if (tab === 'event')       loadOnlinePlayers()
     if (tab === 'news')        loadNews()
     if (tab === 'dm')          { loadOnlinePlayers(); loadDmInbox() }
-  }, [authed, tab, loadMaintenance, loadRankings, loadWorldLogs, loadReports, loadOnlinePlayers, loadNews, loadDmInbox])
+    if (tab === 'users')       loadOnlinePlayers()
+  }, [authed, tab, loadMaintenance, loadRankings, loadWorldLogs, loadBlockStats, loadReports, loadOnlinePlayers, loadNews, loadDmInbox])
 
   const now = Date.now()
   const isOpen = windows.some(w => winActive(w, now))
@@ -662,7 +690,7 @@ export function AdminPanelMinimal() {
 
   const TAB_LABELS: Record<Tab, string> = {
     maintenance: 'メンテナンス', message: 'メッセージ配信', dm: `DM${dmUnread > 0 ? `(${dmUnread})` : ''}`, event: 'イベント',
-    ranking: 'ランキング', worldlog: 'ワールドログ',
+    ranking: 'ランキング', worldlog: 'プレイログ',
     users: 'ユーザー管理', reports: '報告BOX', news: 'お知らせ',
   }
 
@@ -975,20 +1003,20 @@ export function AdminPanelMinimal() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   <div>
                     <label style={S.label}>プレイヤー名</label>
-                    <input value={editingRanking.player_name}
-                      onChange={e => setEditingRanking(r => r && { ...r, player_name: e.target.value })}
+                    <input value={editingRanking.name}
+                      onChange={e => setEditingRanking(r => r && { ...r, name: e.target.value })}
                       style={{ ...S.input, width: 180 }} />
                   </div>
                   <div>
-                    <label style={S.label}>最深階</label>
-                    <input type="number" value={editingRanking.floor}
-                      onChange={e => setEditingRanking(r => r && { ...r, floor: parseInt(e.target.value) || 0 })}
-                      style={{ ...S.input, width: 80 }} />
+                    <label style={S.label}>スコア</label>
+                    <input type="number" value={editingRanking.score}
+                      onChange={e => setEditingRanking(r => r && { ...r, score: parseInt(e.target.value) || 0 })}
+                      style={{ ...S.input, width: 100 }} />
                   </div>
                   <div>
-                    <label style={S.label}>レベル</label>
-                    <input type="number" value={editingRanking.level}
-                      onChange={e => setEditingRanking(r => r && { ...r, level: parseInt(e.target.value) || 0 })}
+                    <label style={S.label}>最大進化Lv</label>
+                    <input type="number" min="0" max="10" value={editingRanking.max_level}
+                      onChange={e => setEditingRanking(r => r && { ...r, max_level: parseInt(e.target.value) || 0 })}
                       style={{ ...S.input, width: 80 }} />
                   </div>
                   <button onClick={saveEditRanking} style={S.btnPrimary}>保存</button>
@@ -1006,8 +1034,9 @@ export function AdminPanelMinimal() {
                       onChange={e => setRankSelected(e.target.checked ? new Set(rankings.map(r => r.id)) : new Set())} />
                   </th>
                   <th style={S.th}>#</th><th style={S.th}>ID</th>
-                  <th style={S.th}>プレイヤー名</th><th style={S.th}>最深</th>
-                  <th style={S.th}>Lv</th><th style={S.th}>日時 (JST)</th>
+                  <th style={S.th}>プレイヤー名</th><th style={S.th}>スコア</th>
+                  <th style={S.th}>最大進化</th><th style={S.th}>知らない人</th>
+                  <th style={S.th}>日時 (JST)</th>
                   <th style={S.th}></th>
                 </tr></thead>
                 <tbody>
@@ -1019,28 +1048,85 @@ export function AdminPanelMinimal() {
                       </td>
                       <td style={S.td}>{i + 1}</td>
                       <td style={{ ...S.td, color: '#666' }}>{r.id}</td>
-                      <td style={S.td}>{r.player_name}</td>
-                      <td style={S.td}>{r.floor}F</td>
-                      <td style={S.td}>Lv{r.level}</td>
+                      <td style={S.td}>{r.name}</td>
+                      <td style={{ ...S.td, fontVariantNumeric: 'tabular-nums' }}>{r.score.toLocaleString()}</td>
+                      <td style={S.td}>{['ペコ卵','ポリン','ドロップス','ポポリン','マリン','ゴースト','マスター','デビル','エンジェル','タオグンカ','知らない人'][r.max_level] ?? r.max_level}</td>
+                      <td style={S.td}>{r.unknown_count > 0 ? `×${r.unknown_count}` : '―'}</td>
                       <td style={S.td}>{fmtJstDate(r.created_at)}</td>
                       <td style={S.td}>
                         <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => setEditingRanking({ id: r.id, player_name: r.player_name, floor: r.floor, level: r.level })} style={S.btnSm}>編集</button>
+                          <button onClick={() => setEditingRanking({ id: r.id, name: r.name, score: r.score, max_level: r.max_level })} style={S.btnSm}>編集</button>
                           <button onClick={() => deleteRanking(r.id)} style={S.btnDanger}>削除</button>
                         </div>
                       </td>
                     </tr>
                   ))}
-                  {rankings.length === 0 && <tr><td colSpan={8} style={{ ...S.td, color: '#666', textAlign: 'center' }}>データなし</td></tr>}
+                  {rankings.length === 0 && <tr><td colSpan={9} style={{ ...S.td, color: '#666', textAlign: 'center' }}>データなし</td></tr>}
                 </tbody>
               </table>
             )}
           </div>
         )}
 
-        {/* ══ ワールドログ ══ */}
+        {/* ══ プレイログ ══ */}
         {tab === 'worldlog' && (
           <div>
+            {/* ブロック一覧 & 生涯合体回数 */}
+            <div style={{ ...S.section, marginBottom: 28 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div style={S.sectionTitle}>ブロック一覧 & 生涯合体回数</div>
+                <button onClick={loadBlockStats} disabled={blockStatsLoading} style={S.btnSm}>
+                  {blockStatsLoading ? '読込中…' : '🔄 更新'}
+                </button>
+                {blockMergeCounts[10] > 0 && (
+                  <span style={{ fontSize: 11, color: '#8888cc' }}>※レベル10はランキングデータから集計</span>
+                )}
+              </div>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>No.</th>
+                  <th style={S.th}>ブロック名</th>
+                  <th style={S.th}>アイコン</th>
+                  <th style={S.th}>スコア(合体時)</th>
+                  <th style={{ ...S.th, textAlign: 'right' }}>生涯合体回数</th>
+                </tr></thead>
+                <tbody>
+                  {[
+                    { id: 0, name: 'ペコペコの卵',   icon: '卵', score:  1 },
+                    { id: 1, name: 'ポリン',          icon: 'ポ', score:  3 },
+                    { id: 2, name: 'ドロップス',      icon: '滴', score:  6 },
+                    { id: 3, name: 'ポポリン',        icon: 'ポポ', score: 10 },
+                    { id: 4, name: 'マリンスフィア',  icon: '海', score: 15 },
+                    { id: 5, name: 'ゴーストリング',  icon: '幽', score: 21 },
+                    { id: 6, name: 'マスターリング',  icon: '王', score: 28 },
+                    { id: 7, name: 'デビルリング',    icon: '悪', score: 36 },
+                    { id: 8, name: 'エンジェリング',  icon: '天', score: 45 },
+                    { id: 9, name: 'タオグンカ',      icon: '鬼', score: 55 },
+                    { id: 10, name: '知らない人',     icon: '？', score:  0 },
+                  ].map(m => (
+                    <tr key={m.id}>
+                      <td style={{ ...S.td, color: '#666' }}>{m.id}</td>
+                      <td style={S.td}>{m.name}</td>
+                      <td style={{ ...S.td, fontWeight: 700, color: '#a5b4fc' }}>{m.icon}</td>
+                      <td style={S.td}>{m.score > 0 ? `+${m.score}pt` : <span style={{ color: '#666' }}>消滅</span>}</td>
+                      <td style={{ ...S.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {blockStatsLoading ? '…' : (
+                          blockMergeCounts[m.id] > 0
+                            ? <span style={{ color: '#4ade80', fontWeight: 700 }}>{blockMergeCounts[m.id].toLocaleString()} 回</span>
+                            : <span style={{ color: '#444' }}>0</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p style={{ ...S.muted, marginTop: 6 }}>
+                ※ ゲーム側の集計データが蓄積されることで表示されます。レベル10（知らない人）のみランキングから集計。
+              </p>
+            </div>
+
+            {/* 通知ログ */}
+            <div style={S.sectionTitle}>通知ログ</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
               <input value={wlSearch} onChange={e => setWlSearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && loadWorldLogs(wlSearch, wlType)}
@@ -1096,13 +1182,27 @@ export function AdminPanelMinimal() {
                 </tbody>
               </table>
             )}
-            <p style={S.muted}>最新 200 件表示</p>
+            <p style={S.muted}>通知ログ最新 200 件表示</p>
           </div>
         )}
 
         {/* ══ ユーザー管理 ══ */}
         {tab === 'users' && (
           <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ ...S.statCard, padding: '10px 18px', marginBottom: 0 }}>
+                <div style={S.statLabel}>現在オンライン</div>
+                <div style={{ ...S.statValue, fontSize: 24, color: onlinePlayers.length > 0 ? '#4ade80' : '#888' }}>
+                  {evLoading ? '…' : `${onlinePlayers.length} 人`}
+                </div>
+              </div>
+              <button onClick={loadOnlinePlayers} disabled={evLoading} style={S.btnSm}>🔄 更新</button>
+              {onlinePlayers.length > 0 && (
+                <div style={{ fontSize: 12, color: '#8888cc' }}>
+                  {onlinePlayers.map(p => `${p.player_name}(B${p.floor}F)`).join('、')}
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <input value={uSearch} onChange={e => setUSearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && searchUser()}
@@ -1176,21 +1276,21 @@ export function AdminPanelMinimal() {
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                         <div>
                           <label style={S.label}>プレイヤー名</label>
-                          <input value={uEditingRanking.player_name}
-                            onChange={e => setUEditingRanking(r => r && { ...r, player_name: e.target.value })}
+                          <input value={uEditingRanking.name}
+                            onChange={e => setUEditingRanking(r => r && { ...r, name: e.target.value })}
                             style={{ ...S.input, width: 180 }} />
                         </div>
                         <div>
-                          <label style={S.label}>最深階（階層移動）</label>
-                          <input type="number" value={uEditingRanking.floor}
-                            onChange={e => setUEditingRanking(r => r && { ...r, floor: parseInt(e.target.value) || 0 })}
-                            style={{ ...S.input, width: 90 }} />
+                          <label style={S.label}>スコア</label>
+                          <input type="number" value={uEditingRanking.score}
+                            onChange={e => setUEditingRanking(r => r && { ...r, score: parseInt(e.target.value) || 0 })}
+                            style={{ ...S.input, width: 100 }} />
                         </div>
                         <div>
-                          <label style={S.label}>レベル（ステータス修正）</label>
-                          <input type="number" value={uEditingRanking.level}
-                            onChange={e => setUEditingRanking(r => r && { ...r, level: parseInt(e.target.value) || 0 })}
-                            style={{ ...S.input, width: 90 }} />
+                          <label style={S.label}>最大進化Lv</label>
+                          <input type="number" min="0" max="10" value={uEditingRanking.max_level}
+                            onChange={e => setUEditingRanking(r => r && { ...r, max_level: parseInt(e.target.value) || 0 })}
+                            style={{ ...S.input, width: 80 }} />
                         </div>
                         <button onClick={saveUEditRanking} style={S.btnPrimary}>保存</button>
                         <button onClick={() => setUEditingRanking(null)} style={S.btnSm}>キャンセル</button>
@@ -1201,26 +1301,27 @@ export function AdminPanelMinimal() {
                   <table style={S.table}>
                     <thead><tr>
                       <th style={S.th}>ID</th><th style={S.th}>プレイヤー名</th>
-                      <th style={S.th}>最深</th><th style={S.th}>Lv</th>
-                      <th style={S.th}>日時 (JST)</th><th style={S.th}></th>
+                      <th style={S.th}>スコア</th><th style={S.th}>最大進化</th>
+                      <th style={S.th}>知らない人</th><th style={S.th}>日時 (JST)</th><th style={S.th}></th>
                     </tr></thead>
                     <tbody>
                       {uRankings.map(r => (
                         <tr key={r.id} style={uEditingRanking?.id === r.id ? { background: 'rgba(79,70,229,0.08)' } : {}}>
                           <td style={{ ...S.td, color: '#666' }}>{r.id}</td>
-                          <td style={S.td}>{r.player_name}</td>
-                          <td style={S.td}>{r.floor}F</td>
-                          <td style={S.td}>Lv{r.level}</td>
+                          <td style={S.td}>{r.name}</td>
+                          <td style={{ ...S.td, fontVariantNumeric: 'tabular-nums' }}>{r.score.toLocaleString()}</td>
+                          <td style={S.td}>{['ペコ卵','ポリン','ドロップス','ポポリン','マリン','ゴースト','マスター','デビル','エンジェル','タオグンカ','知らない人'][r.max_level] ?? r.max_level}</td>
+                          <td style={S.td}>{r.unknown_count > 0 ? `×${r.unknown_count}` : '―'}</td>
                           <td style={S.td}>{fmtJstDate(r.created_at)}</td>
                           <td style={S.td}>
                             <div style={{ display: 'flex', gap: 4 }}>
-                              <button onClick={() => setUEditingRanking({ id: r.id, player_name: r.player_name, floor: r.floor, level: r.level })} style={S.btnSm}>編集</button>
+                              <button onClick={() => setUEditingRanking({ id: r.id, name: r.name, score: r.score, max_level: r.max_level })} style={S.btnSm}>編集</button>
                               <button onClick={() => deleteURanking(r.id)} style={S.btnDanger}>削除</button>
                             </div>
                           </td>
                         </tr>
                       ))}
-                      {uRankings.length === 0 && <tr><td colSpan={6} style={{ ...S.td, color: '#666', textAlign: 'center' }}>データなし</td></tr>}
+                      {uRankings.length === 0 && <tr><td colSpan={7} style={{ ...S.td, color: '#666', textAlign: 'center' }}>データなし</td></tr>}
                     </tbody>
                   </table>
                 </div>
