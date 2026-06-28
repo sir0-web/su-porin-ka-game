@@ -66,20 +66,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid maxLevel' }, { status: 400 });
   }
 
+  const mergeCounts = Array.isArray(b.mergeCounts)
+    ? (b.mergeCounts as unknown[]).map((n) => Math.max(0, Math.min(1_000_000, Number(n) || 0)))
+    : null;
+  const playerId = typeof b.player_id === 'string' ? b.player_id.trim().slice(0, 50) : null;
+
   try {
     const supabase = getSupabaseAdmin();
     if (!supabase) throw new Error('Supabase is not configured');
-    // Try storing unknown_count; if the column doesn't exist yet, retry
-    // without it so submissions never fail.
+    // Try storing unknown_count + player_id; fall back gracefully if columns are missing.
     let ins = await supabase
       .from('suiga_rankings')
-      .insert({ name, score, max_level: maxLevel, unknown_count: unknown });
+      .insert({ name, score, max_level: maxLevel, unknown_count: unknown, player_id: playerId });
     if (ins.error) {
       ins = await supabase
         .from('suiga_rankings')
         .insert({ name, score, max_level: maxLevel });
       if (ins.error) throw ins.error;
     }
+
+    // suiga_block_stats の生涯合体回数を加算
+    if (mergeCounts && mergeCounts.length > 0) {
+      const { data: current } = await supabase
+        .from('suiga_block_stats')
+        .select('monster_id, total_merges');
+      const totals = new Map<number, number>();
+      for (const row of current ?? []) totals.set(Number(row.monster_id), Number(row.total_merges));
+      const upserts = mergeCounts
+        .map((count, i) => ({ monster_id: i, total_merges: (totals.get(i) ?? 0) + count }))
+        .filter((_, i) => (mergeCounts[i] ?? 0) > 0);
+      if (upserts.length > 0) await supabase.from('suiga_block_stats').upsert(upserts);
+    }
+
     return NextResponse.json(await topTen());
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

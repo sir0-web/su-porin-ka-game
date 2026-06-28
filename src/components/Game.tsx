@@ -93,7 +93,7 @@ interface GS {
   mergeCounts: number[];  // per-level merge count for this game
 }
 
-interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; mergeCounts?: number[]; }
+interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; mergeCounts?: number[]; player_id?: string; }
 
 // Ranking label for an entry's max evolution. Players who reached 知らない人
 // get it revealed with the number of times they created it (e.g. 知らない人＋3).
@@ -135,6 +135,7 @@ function insertRanking(entry: RankEntry): { list: RankEntry[]; index: number } {
 }
 
 const PLAYER_NAME_KEY = 'sporinkaPlayerName';
+const PLAYER_ID_KEY   = 'sporinkaPlayerId';
 
 // Random alphanumeric id (upper/lower case + digits)
 function randId(len: number): string {
@@ -233,6 +234,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const rankingRef    = useRef<RankEntry[]>([]);
   const lastRankIdxRef = useRef<number>(-1);
   const playerNameRef = useRef<string>('');
+  const playerIdRef   = useRef<string>('');
   const popupsRef     = useRef<Popup[]>([]);
   const particlesRef  = useRef<Particle[]>([]);
   const ringsRef      = useRef<Ring[]>([]);
@@ -310,6 +312,14 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
     playerNameRef.current = name;
     setPlayerNameInput(name);
+
+    let pid = '';
+    try { pid = localStorage.getItem(PLAYER_ID_KEY) ?? ''; } catch { /* */ }
+    if (!pid) {
+      pid = randId(16);
+      try { localStorage.setItem(PLAYER_ID_KEY, pid); } catch { /* */ }
+    }
+    playerIdRef.current = pid;
   }, []);
 
   // Load the shared ranking once on mount (falls back to local on failure)
@@ -319,6 +329,26 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       rankingRef.current = list;
       setRankingTick((t) => t + 1);
     });
+  }, []);
+
+  // 60秒ごとにオンライン心拍を送信（Adminのオンライン人数表示用）
+  useEffect(() => {
+    const sendHeartbeat = () => {
+      const pid = playerIdRef.current;
+      if (!pid) return;
+      fetch('/api/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          player_id: pid,
+          player_name: (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 30),
+          floor: gs.current.maxLevel,
+        }),
+      }).catch(() => {/* offline時は無視 */});
+    };
+    sendHeartbeat();
+    const id = setInterval(sendHeartbeat, 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // Load audio assets
@@ -1912,6 +1942,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const base = level === MAX_LEVEL ? SPECIAL_MERGE_SCORE : MONSTERS[level + 1].score;
       const gain = base * combo;
       gs.current.score += gain;
+      gs.current.mergeCounts[level] = (gs.current.mergeCounts[level] ?? 0) + 1;
 
       // Merge SE — richer the bigger the combo
       if (level === MAX_LEVEL) {
@@ -2164,7 +2195,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             // immediately, then replace it with the shared online result
             // once the submission resolves.
             const name = (playerNameRef.current.trim() || 'ぼうけんしゃ').slice(0, 10);
-            const entry = { name, score: s.score, maxLevel: s.maxLevel, unknown: s.unknownCount };
+            const entry = { name, score: s.score, maxLevel: s.maxLevel, unknown: s.unknownCount, mergeCounts: [...s.mergeCounts], player_id: playerIdRef.current || undefined };
             const local = insertRanking(entry);
             rankingRef.current = local.list;
             lastRankIdxRef.current = local.index;

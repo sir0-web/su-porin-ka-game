@@ -36,6 +36,11 @@ interface PlayerSession {
   state: PlayerStateSnapshot | null
 }
 
+interface PlayerDevice {
+  player_id: string; play_count: number; names: string[]
+  best_score: number; last_played: string; is_online: boolean
+}
+
 interface Report {
   id: number; category: string; content: string
   player_name: string | null; image_url: string | null
@@ -132,6 +137,9 @@ export function AdminPanelMinimal() {
   const [uMsg, setUMsg]           = useState('')
   const [uEditingRanking, setUEditingRanking] = useState<EditingRanking | null>(null)
   const [uSessions, setUSessions] = useState<PlayerSession[]>([])
+  // ── 端末別プレイ履歴 ──
+  const [playerDevices, setPlayerDevices] = useState<PlayerDevice[]>([])
+  const [devLoading, setDevLoading]       = useState(false)
 
   // ── Reports ──
   const [reports, setReports]         = useState<Report[]>([])
@@ -269,13 +277,18 @@ export function AdminPanelMinimal() {
   // ── Ranking ──
   const loadRankings = useCallback(async (search = '') => {
     setRLoading(true); setRMsg('')
-    let q = db.from('suiga_rankings').select('*').order('score', { ascending: false }).limit(100)
-    if (search) q = q.ilike('name', `%${search}%`)
-    const { data } = await q
-    setRankings((data ?? []) as RankingEntry[])
+    try {
+      const res = await fetch('/api/admin-query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'rankings', search }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) setRMsg(`エラー: ${json.error ?? res.status}`)
+      setRankings((json.data ?? []) as RankingEntry[])
+    } catch (e) { setRMsg(`エラー: ${String(e)}`) }
     setRankSelected(new Set())
     setRLoading(false)
-  }, [db])
+  }, [])
 
   const deleteRanking = async (id: number) => {
     if (!confirm('このランキングエントリを削除しますか？')) return
@@ -298,38 +311,38 @@ export function AdminPanelMinimal() {
   // ── World Log ──
   const loadWorldLogs = useCallback(async (search = '', typeFilter = '') => {
     setWlLoading(true); setWlMsg('')
-    let q = db.from('suiga_world_notifications').select('*').order('created_at', { ascending: false }).limit(200)
-    if (search.trim()) q = q.ilike('player_name', `%${search.trim()}%`)
-    if (typeFilter) q = q.eq('type', typeFilter)
-    const { data, error } = await q
-    if (error) setWlMsg(`エラー: ${error.message}`)
-    setWlogs((data ?? []) as WorldNotif[])
+    try {
+      const res = await fetch('/api/admin-query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'worldlogs', search, typeFilter }),
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) setWlMsg(`エラー: ${json.error ?? res.status}`)
+      setWlogs((json.data ?? []) as WorldNotif[])
+    } catch (e) { setWlMsg(`エラー: ${String(e)}`) }
     setWlSelected(new Set())
     setWlLoading(false)
-  }, [db])
+  }, [])
 
   const loadBlockStats = useCallback(async () => {
     setBlockStatsLoading(true)
     try {
-      // suiga_block_stats テーブルがあればそこから取得
-      const { data: bsData, error: bsErr } = await db.from('suiga_block_stats').select('monster_id, total_merges').order('monster_id')
-      if (!bsErr && bsData && bsData.length > 0) {
+      const res = await fetch('/api/admin-query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'blockstats' }),
+      })
+      if (res.ok) {
+        const json = await res.json()
         const counts = new Array(11).fill(0)
-        for (const row of bsData) {
+        for (const row of (json.data ?? []) as { monster_id: number; total_merges: number }[]) {
           const idx = Number(row.monster_id)
           if (idx >= 0 && idx < 11) counts[idx] = Number(row.total_merges) || 0
         }
         setBlockMergeCounts(counts)
-      } else {
-        // フォールバック：suiga_rankings.unknown_count を集計（レベル10のみ）
-        const { data: rkData } = await db.from('suiga_rankings').select('unknown_count')
-        const counts = new Array(11).fill(0)
-        counts[10] = (rkData ?? []).reduce((s: number, r: { unknown_count: number }) => s + (Number(r.unknown_count) || 0), 0)
-        setBlockMergeCounts(counts)
       }
     } catch { /* ignore */ }
     setBlockStatsLoading(false)
-  }, [db])
+  }, [])
 
   const deleteWorldLog = async (id: number) => {
     if (!confirm('このワールドログを削除しますか？')) return
@@ -484,6 +497,20 @@ export function AdminPanelMinimal() {
 
   // ── Stats ──
 
+  const loadPlayerDevices = useCallback(async () => {
+    setDevLoading(true)
+    try {
+      const res = await fetch('/api/admin-query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'playerstats' }),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        setPlayerDevices((json.data ?? []) as PlayerDevice[])
+      }
+    } catch { /* ignore */ }
+    setDevLoading(false)
+  }, [])
 
   // ── Event ──
   const loadOnlinePlayers = useCallback(async () => {
@@ -669,8 +696,15 @@ export function AdminPanelMinimal() {
     if (tab === 'event')       loadOnlinePlayers()
     if (tab === 'news')        loadNews()
     if (tab === 'dm')          { loadOnlinePlayers(); loadDmInbox() }
-    if (tab === 'users')       loadOnlinePlayers()
-  }, [authed, tab, loadMaintenance, loadRankings, loadWorldLogs, loadBlockStats, loadReports, loadOnlinePlayers, loadNews, loadDmInbox])
+    if (tab === 'users')       { loadOnlinePlayers(); loadPlayerDevices() }
+  }, [authed, tab, loadMaintenance, loadRankings, loadWorldLogs, loadBlockStats, loadReports, loadOnlinePlayers, loadNews, loadDmInbox, loadPlayerDevices])
+
+  // ユーザー管理タブ：30秒ごとにオンライン人数を自動更新
+  useEffect(() => {
+    if (!authed || tab !== 'users') return
+    const id = setInterval(loadOnlinePlayers, 30_000)
+    return () => clearInterval(id)
+  }, [authed, tab, loadOnlinePlayers])
 
   const now = Date.now()
   const isOpen = windows.some(w => winActive(w, now))
@@ -1203,6 +1237,60 @@ export function AdminPanelMinimal() {
                 </div>
               )}
             </div>
+            {/* ── 端末別プレイ履歴 ── */}
+            <div style={{ ...S.section, marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div style={S.sectionTitle}>端末別プレイ履歴</div>
+                <button onClick={loadPlayerDevices} disabled={devLoading} style={S.btnSm}>
+                  {devLoading ? '読込中…' : '🔄 更新'}
+                </button>
+                <span style={S.muted}>{playerDevices.length} 端末</span>
+              </div>
+              {playerDevices.length === 0 && !devLoading && (
+                <p style={S.muted}>データなし（ゲームプレイ後に反映）</p>
+              )}
+              {playerDevices.length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={S.table}>
+                    <thead><tr>
+                      <th style={S.th}>端末ID</th>
+                      <th style={S.th}>状態</th>
+                      <th style={{ ...S.th, textAlign: 'right' }}>プレイ回数</th>
+                      <th style={{ ...S.th, textAlign: 'right' }}>最高スコア</th>
+                      <th style={S.th}>使用キャラ名</th>
+                      <th style={S.th}>最終プレイ</th>
+                    </tr></thead>
+                    <tbody>
+                      {playerDevices.map(d => (
+                        <tr key={d.player_id}>
+                          <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 11, color: '#666' }}>
+                            {d.player_id.slice(0, 8)}…
+                          </td>
+                          <td style={S.td}>
+                            {d.is_online
+                              ? <span style={{ color: '#4ade80', fontWeight: 700 }}>● オンライン</span>
+                              : <span style={{ color: '#555' }}>○ オフライン</span>}
+                          </td>
+                          <td style={{ ...S.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {d.play_count.toLocaleString()} 回
+                          </td>
+                          <td style={{ ...S.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {d.best_score.toLocaleString()} pt
+                          </td>
+                          <td style={{ ...S.td, fontSize: 12 }}>
+                            {d.names.join('、')}
+                          </td>
+                          <td style={{ ...S.td, fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>
+                            {fmtJstDate(d.last_played)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <input value={uSearch} onChange={e => setUSearch(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && searchUser()}
