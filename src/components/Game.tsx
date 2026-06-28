@@ -39,8 +39,8 @@ const FRAME_SRC  = '/frame.png';
 const FRAME2_SRC = '/frame2_alpha.png'; // white pixels pre-processed to transparent
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
-  nextX:  zx(0.250 * W), nextY: zy(0.112 * H), nextLabelY: zy(0.072 * H),
-  bestX:  zx(0.225 * W), scoreX: zx(0.513 * W), evoX: zx(0.786 * W),
+  nextX:  zx(0.127 * W), nextY: zy(0.100 * H), nextLabelY: zy(0.048 * H),
+  bestX:  zx(0.225 * W), scoreX: zx(0.500 * W), evoX: zx(0.786 * W),
   labelY: zy(0.907 * H), valueY: zy(0.948 * H),
 };
 // Option-button circles baked into the frame (raw canvas coords; pass through
@@ -940,7 +940,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const label = (x: number, text: string) => {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = P.gold;
-      ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
+      ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
       ctx.fillText(text, x, FA.labelY);
     };
     label(FA.bestX, 'BEST');
@@ -1447,8 +1447,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         { fill: '#ffb3c2', deep: '#ff5d7a', glow: '#ff8fa3' }, // red / pink
         { fill: '#ffe79a', deep: '#ffb43a', glow: '#ffd166' }, // warm yellow
       ];
-      const popFont = '900 48px "Hiragino Maru Gothic ProN", "Rounded Mplus 1c", "Noto Sans JP", system-ui, sans-serif';
-      const x0 = 30, lh = 54, baseY = 102;
+      const popFont = '900 52px "Hiragino Maru Gothic ProN", "Rounded Mplus 1c", "Noto Sans JP", system-ui, sans-serif';
+      const lh = 58, baseY = 102;
       const now = Date.now();
       ctx.save();
       ctx.textAlign = 'left';
@@ -1456,7 +1456,16 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       lines.forEach(([red, white], i) => {
         const by = baseY + i * lh;
         const c = pops[i % pops.length];
-        let x = x0;
+        // Measure each line's total width to center it around CX
+        ctx.font = popFont;
+        const redW = ctx.measureText(red).width;
+        let lineW = redW;
+        if (white) {
+          ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
+          lineW += 4 + ctx.measureText(white).width;
+          ctx.font = popFont;
+        }
+        let x = Math.max(8, CX - lineW / 2);
         ctx.font = popFont;
         ctx.lineJoin = 'round';
         const bob = Math.sin(now * 0.0024 + i * 0.8) * 3; // playful bounce
@@ -1476,7 +1485,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         ctx.save();
         ctx.shadowColor = c.glow;
         ctx.shadowBlur = 9 + 4 * (0.5 + 0.5 * Math.sin(now * 0.003 + i));
-        const g = ctx.createLinearGradient(0, yy - 42, 0, yy + 6);
+        const g = ctx.createLinearGradient(0, yy - 46, 0, yy + 7);
         g.addColorStop(0,    '#ffffff');
         g.addColorStop(0.20, c.fill);
         g.addColorStop(1,    c.deep);

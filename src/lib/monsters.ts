@@ -185,8 +185,8 @@ export const MONSTERS: MonsterDef[] = [
   },
 ];
 
-// Global block-size scale (0.73 — fits wider frame2.png play field).
-const BLOCK_SCALE = 0.73;
+// Global block-size scale (original size; frame2.png's wider field accommodates it).
+const BLOCK_SCALE = 0.81;
 for (const m of MONSTERS) m.radius = m.radius * BLOCK_SCALE;
 
 export const MAX_LEVEL = MONSTERS.length - 1;
