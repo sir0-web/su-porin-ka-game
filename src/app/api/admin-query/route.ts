@@ -49,6 +49,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ data: [{ monster_id: 10, total_merges: total }], fallback: true })
   }
 
+  if (action === 'sendmessage') {
+    const { error } = await db.from('suiga_world_notifications').insert({
+      type: String(body.msgType || 'system'),
+      title: String(body.msgTitle || ''),
+      message: String(body.msgBody || ''),
+      player_name: 'ADMIN',
+      player_id: 'admin-broadcast',
+      display_ms: Number(body.displayMs) || 4000,
+    })
+    return NextResponse.json({ ok: !error, error: error?.message })
+  }
+
   if (action === 'playerstats') {
     // suiga_rankings から端末(player_id)別プレイ回数・使用キャラ名を集計
     const { data: rows } = await db

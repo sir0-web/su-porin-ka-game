@@ -111,7 +111,7 @@ const COMBO_WINDOW = 850; // ms within which merges count as a combo
 const COMBO_CAP = 9;      // max combo multiplier / display
 
 const RANK_KEY = 'sporinkaRanking';
-const RANK_MAX = 10;
+const RANK_MAX = 30;
 
 function loadRanking(): RankEntry[] {
   try {
@@ -1761,8 +1761,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // Ranking
     ctx.fillStyle = P.gold;
     ctx.font = 'bold 11px "Noto Sans JP", sans-serif';
-    ctx.fillText('🏆  ランキング  BEST10', CX, by + 172);
-    drawRanking(ctx, bx + 14, by + 192, bw - 28, 28, 8, lastRankIdxRef.current);
+    ctx.fillText('🏆  ランキング  TOP10', CX, by + 172);
+    drawRanking(ctx, bx + 14, by + 192, bw - 28, 22, 10, lastRankIdxRef.current);
 
     // helper: gradient button
     const btn = (
@@ -2661,33 +2661,72 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             >
               <div style={panelStyle}>
                 {modal === 'ranking' && (<>
-                  <h2 style={h2Style}>🏆 ランキング TOP10</h2>
+                  <h2 style={h2Style}>🏆 ランキング TOP30</h2>
                   {rankingRef.current.length === 0 ? (
                     <p style={{ textAlign: 'center', color: '#8a7a50', fontSize: 12 }}>
                       まだ記録がありません
                     </p>
                   ) : (
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <tbody>
-                        {rankingRef.current.slice(0, 10).map((e, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid rgba(200,160,48,0.18)' }}>
-                            <td style={{
-                              padding: '7px 4px', width: 28, fontSize: 14, fontWeight: 'bold',
-                              color: i === 0 ? '#ffd24a' : i === 1 ? '#cfd4dd' : i === 2 ? '#d8945a' : '#6a6a90',
-                            }}>{i + 1}</td>
-                            <td style={{ padding: '7px 4px' }}>
-                              {e.name.length > 8 ? e.name.slice(0, 8) + '…' : e.name}
-                            </td>
-                            <td style={{ padding: '7px 4px', textAlign: 'right', color: '#ffe050', fontWeight: 'bold' }}>
-                              {e.score}
-                            </td>
-                            <td style={{ padding: '7px 4px', textAlign: 'right', color: e.maxLevel >= MAX_LEVEL ? '#d0b0ff' : '#6a6a90', fontSize: 10 }}>
-                              {rankEvoLabel(e)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div>
+                      {rankingRef.current.slice(0, 30).map((e, i) => {
+                        const isFirst  = i === 0;
+                        const isTop3   = i < 3;
+                        const isTop10  = i < 10;
+                        const rankColor = i === 0 ? '#ffd24a' : i === 1 ? '#cfd4dd' : i === 2 ? '#d8945a' : i < 10 ? '#a090cc' : '#555570';
+                        const nameTrunc = e.name.length > (isFirst ? 10 : isTop10 ? 9 : 8) ? e.name.slice(0, isFirst ? 10 : isTop10 ? 9 : 8) + '…' : e.name;
+                        if (isFirst) return (
+                          <div key={i} style={{
+                            background: 'linear-gradient(135deg,#3a2800,#1a1200,#3a2800)',
+                            border: '1.5px solid #ffd24a',
+                            borderRadius: 8, padding: '10px 12px', marginBottom: 8,
+                            boxShadow: '0 0 12px rgba(255,210,74,0.3)',
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontSize: 22, fontWeight: 900, color: '#ffd24a', minWidth: 32, textShadow: '0 0 8px rgba(255,210,74,0.8)' }}>1</span>
+                              <span style={{ fontSize: 16, fontWeight: 700, color: '#fff8e0', flex: 1 }}>{nameTrunc}</span>
+                              <span style={{ fontSize: 18, fontWeight: 900, color: '#ffd24a', textShadow: '0 0 6px rgba(255,210,74,0.6)' }}>{e.score.toLocaleString()}</span>
+                            </div>
+                            <div style={{ textAlign: 'right', fontSize: 10, color: e.maxLevel >= MAX_LEVEL ? '#d0b0ff' : '#aa9060', marginTop: 2 }}>{rankEvoLabel(e)}</div>
+                          </div>
+                        );
+                        if (isTop3) return (
+                          <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            borderBottom: '1px solid rgba(200,160,48,0.2)',
+                            padding: '7px 4px',
+                          }}>
+                            <span style={{ fontSize: 15, fontWeight: 800, color: rankColor, minWidth: 24 }}>{i + 1}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#e8d8b0', flex: 1 }}>{nameTrunc}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: '#ffe050' }}>{e.score.toLocaleString()}</span>
+                            <span style={{ fontSize: 10, color: e.maxLevel >= MAX_LEVEL ? '#d0b0ff' : '#6a6a90', minWidth: 60, textAlign: 'right' }}>{rankEvoLabel(e)}</span>
+                          </div>
+                        );
+                        if (isTop10) return (
+                          <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            borderBottom: '1px solid rgba(120,100,48,0.15)',
+                            padding: '5px 4px',
+                          }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: rankColor, minWidth: 24 }}>{i + 1}</span>
+                            <span style={{ fontSize: 12, color: '#c8b888', flex: 1 }}>{nameTrunc}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#d0b840' }}>{e.score.toLocaleString()}</span>
+                            <span style={{ fontSize: 10, color: e.maxLevel >= MAX_LEVEL ? '#c0a0f0' : '#555570', minWidth: 56, textAlign: 'right' }}>{rankEvoLabel(e)}</span>
+                          </div>
+                        );
+                        return (
+                          <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: 4,
+                            borderBottom: '1px solid rgba(80,70,40,0.12)',
+                            padding: '3px 4px',
+                          }}>
+                            <span style={{ fontSize: 10, color: '#444460', minWidth: 24 }}>{i + 1}</span>
+                            <span style={{ fontSize: 10, color: '#706858', flex: 1 }}>{nameTrunc}</span>
+                            <span style={{ fontSize: 10, color: '#806e40' }}>{e.score.toLocaleString()}</span>
+                            <span style={{ fontSize: 9, color: e.maxLevel >= MAX_LEVEL ? '#a080d0' : '#404058', minWidth: 52, textAlign: 'right' }}>{rankEvoLabel(e)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                   <button style={closeBtn} onClick={closeModal}>閉じる</button>
                 </>)}

@@ -18,13 +18,13 @@ async function topTen(): Promise<RankEntry[]> {
     .from('suiga_rankings')
     .select('name, score, max_level, unknown_count')
     .order('score', { ascending: false })
-    .limit(10);
+    .limit(30);
   if (withCol.error) {
     const base = await supabase
       .from('suiga_rankings')
       .select('name, score, max_level')
       .order('score', { ascending: false })
-      .limit(10);
+      .limit(30);
     if (base.error) throw base.error;
     rows = (base.data ?? []) as unknown as RankRow[];
   } else {

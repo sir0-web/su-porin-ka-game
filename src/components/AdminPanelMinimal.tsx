@@ -12,7 +12,7 @@ const LOCAL_URL = 'http://localhost:54321'
 const LOCAL_DEFAULT_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRFA0NiK7kyqp8La5JAmZB9bFTJFa3o-PxnRmmHzM_s'
 
 type EnvMode = 'production' | 'local'
-type Tab = 'maintenance' | 'message' | 'dm' | 'event' | 'ranking' | 'worldlog' | 'users' | 'reports' | 'news'
+type Tab = 'maintenance' | 'message' | 'dm' | 'ranking' | 'worldlog' | 'users' | 'reports' | 'news'
 
 interface OnlinePlayer { player_id: string; player_name: string; floor: number; updated_at: string }
 
@@ -268,9 +268,15 @@ export function AdminPanelMinimal() {
     if (!msgTitle || !msgBody) return
     setMsgSending(true)
     const displayMs = Math.max(1, parseFloat(msgDisplaySec) || 4) * 1000
-    const { error } = await db.from('suiga_world_notifications').insert({ type: msgType, title: msgTitle, message: msgBody, player_name: 'ADMIN', player_id: 'admin-broadcast', display_ms: displayMs })
-    setMsgResult(error ? `エラー: ${error.message}` : '送信しました ✓')
-    if (!error) { setMsgTitle(''); setMsgBody('') }
+    try {
+      const res = await fetch('/api/admin-query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: ADMIN_KEY, action: 'sendmessage', msgType, msgTitle, msgBody, displayMs }),
+      })
+      const json = await res.json()
+      setMsgResult(json.ok ? '送信しました ✓' : `エラー: ${json.error ?? res.status}`)
+      if (json.ok) { setMsgTitle(''); setMsgBody('') }
+    } catch (e) { setMsgResult(`エラー: ${String(e)}`) }
     setMsgSending(false)
   }
 
@@ -693,7 +699,6 @@ export function AdminPanelMinimal() {
     if (tab === 'ranking')     loadRankings()
     if (tab === 'worldlog')    { loadWorldLogs(); loadBlockStats() }
     if (tab === 'reports')     loadReports()
-    if (tab === 'event')       loadOnlinePlayers()
     if (tab === 'news')        loadNews()
     if (tab === 'dm')          { loadOnlinePlayers(); loadDmInbox() }
     if (tab === 'users')       { loadOnlinePlayers(); loadPlayerDevices() }
@@ -723,7 +728,7 @@ export function AdminPanelMinimal() {
   )
 
   const TAB_LABELS: Record<Tab, string> = {
-    maintenance: 'メンテナンス', message: 'メッセージ配信', dm: `DM${dmUnread > 0 ? `(${dmUnread})` : ''}`, event: 'イベント',
+    maintenance: 'メンテナンス', message: 'メッセージ配信', dm: `DM${dmUnread > 0 ? `(${dmUnread})` : ''}`,
     ranking: 'ランキング', worldlog: 'プレイログ',
     users: 'ユーザー管理', reports: '報告BOX', news: 'お知らせ',
   }
@@ -992,26 +997,6 @@ export function AdminPanelMinimal() {
                 <button onClick={() => void sendDm()} disabled={dmSending} style={{ ...S.btnPrimary, marginTop: 10 }}>{dmSending ? '送信中…' : '✉️ DMを送信'}</button>
               </div>
             </div>
-          </div>
-        )}
-
-        {tab === 'event' && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <button onClick={loadOnlinePlayers} style={S.btnSm}>🔄 オンライン更新</button>
-              <span style={S.muted}>オンライン中: {onlinePlayers.length} 人{evLoading ? '（読み込み中…）' : ''}</span>
-            </div>
-            {evMsg && <div style={{ color: evMsg.includes('エラー') ? '#f87171' : '#4ade80', marginBottom: 12 }}>{evMsg}</div>}
-
-            {/* イベント強制発動 */}
-            <div style={S.section}>
-              <div style={S.sectionTitle}>イベント強制発動</div>
-              <div style={{ ...S.card, marginTop: 0 }}>
-                <div style={S.cardTitle}>すかるぽりん出現（全プレイヤー対象・即時）</div>
-                <button onClick={fireSkulporin} style={S.btnPrimary}>👹 すかるぽりんを出現させる</button>
-              </div>
-            </div>
-
           </div>
         )}
 
