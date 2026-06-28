@@ -39,7 +39,7 @@ const FRAME_SRC  = '/frame.png';
 const FRAME2_SRC = '/frame2_alpha.png'; // white pixels pre-processed to transparent
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
-  nextX:  zx(0.159 * W), nextY: zy(0.102 * H), nextLabelY: zy(0.055 * H),
+  nextX:  zx(0.159 * W), nextY: zy(0.112 * H), nextLabelY: zy(0.055 * H),
   bestX:  zx(0.225 * W), scoreX: zx(0.500 * W), evoX: zx(0.786 * W),
   labelY: zy(0.907 * H), valueY: zy(0.948 * H),
 };
