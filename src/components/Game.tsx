@@ -268,6 +268,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
   const [, setRankingTick]  = useState(0);
   const [playerNameInput, setPlayerNameInput] = useState('');
+  const [sysNotif, setSysNotif] = useState<{ title: string; message: string; type: string } | null>(null);
+  const notifQueueRef  = useRef<Array<{ title: string; message: string; type: string; display_ms: number }>>([]);
+  const notifShowingRef = useRef(false);
+  const lastNotifAtRef  = useRef<string>(new Date().toISOString());
 
   const gs = useRef<GS>({
     phase: 'start',
@@ -328,6 +332,45 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       rankingRef.current = list;
       setRankingTick((t) => t + 1);
     });
+  }, []);
+
+  // Adminアナウンスを20秒ごとにポーリング
+  useEffect(() => {
+    const showNext = () => {
+      if (notifShowingRef.current) return;
+      const next = notifQueueRef.current.shift();
+      if (!next) return;
+      notifShowingRef.current = true;
+      setSysNotif({ title: next.title, message: next.message, type: next.type });
+      setTimeout(() => {
+        setSysNotif(null);
+        notifShowingRef.current = false;
+        setTimeout(showNext, 400);
+      }, next.display_ms);
+    };
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/notifications?since=${encodeURIComponent(lastNotifAtRef.current)}`);
+        if (!res.ok) return;
+        const { data } = await res.json() as { data: Array<{ title: string; message: string; type: string; display_ms: number; created_at: string }> };
+        if (!Array.isArray(data) || data.length === 0) return;
+        lastNotifAtRef.current = data[data.length - 1].created_at;
+        for (const n of data) {
+          notifQueueRef.current.push({
+            title: String(n.title || ''),
+            message: String(n.message || ''),
+            type: String(n.type || 'system'),
+            display_ms: Math.max(2000, Math.min(30000, Number(n.display_ms) || 4000)),
+          });
+        }
+        showNext();
+      } catch { /* offline時無視 */ }
+    };
+
+    poll();
+    const id = setInterval(poll, 20_000);
+    return () => clearInterval(id);
   }, []);
 
   // 60秒ごとにオンライン心拍を送信（Adminのオンライン人数表示用）
@@ -2513,6 +2556,27 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             handleClick(t.clientX, t.clientY);
           }}
         />
+        {/* Admin アナウンスバナー */}
+        {sysNotif && (
+          <div style={{
+            position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)',
+            background: 'linear-gradient(135deg,rgba(18,8,42,0.96),rgba(40,18,80,0.96))',
+            border: '1.5px solid rgba(200,140,255,0.55)',
+            borderRadius: 10, padding: '10px 18px',
+            zIndex: 9900, maxWidth: '92%', width: 320,
+            boxShadow: '0 4px 20px rgba(140,80,255,0.35)',
+            pointerEvents: 'none', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#c090ff', marginBottom: 4 }}>
+              {sysNotif.type === 'maintenance' ? '🔧 メンテナンス' :
+               sysNotif.type === 'event'       ? '🎉 イベント' :
+               sysNotif.type === 'achievement' ? '🏆 実績' : '📢 お知らせ'}
+              {sysNotif.title ? `　${sysNotif.title}` : ''}
+            </div>
+            <div style={{ fontSize: 12, color: '#e8d8ff', lineHeight: 1.6 }}>{sysNotif.message}</div>
+          </div>
+        )}
+
         {/* Overlay buttons */}
         {(() => {
           const btnBase: React.CSSProperties = {
