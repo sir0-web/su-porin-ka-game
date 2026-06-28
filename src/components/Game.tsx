@@ -25,7 +25,7 @@ const zy = (y: number) => FZ_CY + (y - FZ_CY) * FRAME_ZOOM;
 
 // Play field aligned to the (zoomed) frame.png opening so blocks sit inside the border.
 const CEILING_Y = 133;   // frame2.png opening top (canvas px)
-const FLOOR_Y   = 597;   // frame2.png opening bottom (canvas px)
+const FLOOR_Y   = 648;   // frame2.png: bottom of white area (top of dark plates)
 const BHUD_Y = FLOOR_Y + WALL;
 const DROP_Y = 110;      // aim piece above danger line
 const GL = 41;           // frame2.png opening left
@@ -36,7 +36,7 @@ const DROP_COOLDOWN = 550;
 
 // ── Decorative frame skin (overlaid during play) ───────────────
 const FRAME_SRC  = '/frame.png';
-const FRAME2_SRC = '/frame2.png';
+const FRAME2_SRC = '/frame2_alpha.png'; // white pixels pre-processed to transparent
 // HUD anchor points within the (zoomed) frame, as px in the W×H canvas.
 const FA = {
   nextX:  zx(0.250 * W), nextY: zy(0.112 * H), nextLabelY: zy(0.072 * H),
@@ -2210,13 +2210,13 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       drawParticles(ctx, !isPausedRef.current);
 
       if (useFrame2) {
-        // frame2 border on top: evenodd clip draws frame everywhere EXCEPT inner play field.
-        // Outer rect (x=28..531) excludes frame2's narrow outer white margins → page bg shows.
+        // frame2_alpha: white pixels are pre-processed to alpha=0, so transparent areas
+        // show game content through; dark/gold borders appear on top.
+        // Outer clip (x=28..531) trims narrow cream-coloured outer margins.
         ctx.save();
         ctx.beginPath();
         ctx.rect(28, 0, 503, H);
-        ctx.rect(GL, CEILING_Y, GW, FLOOR_Y - CEILING_Y);
-        ctx.clip('evenodd');
+        ctx.clip();
         ctx.drawImage(frame2ImgRef.current as HTMLImageElement, 0, 0, W, H);
         ctx.restore();
         drawCeiling(ctx);
