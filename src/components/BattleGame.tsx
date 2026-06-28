@@ -53,6 +53,8 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
   const [notice, setNotice] = useState<string | null>(null);   // transient banner (e.g. disconnects)
   const [confirmExit, setConfirmExit] = useState(false);       // "back to TOP" confirm during a match
   const noticeTimerRef = useRef<number>(0);
+  const [lobbyCountdown, setLobbyCountdown] = useState(FORCE_CPU_MS / 1000);
+  const lobbyStartTimeRef = useRef(0);
   const takenOverRef = useRef<Set<string>>(new Set());         // human ids converted to CPU on disconnect
 
   const netRef = useRef<BattleNet | null>(null);
@@ -410,6 +412,24 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, humans.length, room.cpus.length]);
+
+  // ── Lobby countdown display ────────────────────────────────
+  // Reset start time whenever participants change (mirrors auto-start timer)
+  useEffect(() => {
+    if (phase !== 'lobby' || offlineRef.current) return;
+    lobbyStartTimeRef.current = Date.now();
+    setLobbyCountdown(FORCE_CPU_MS / 1000);
+  }, [phase, humans.length, room.cpus.length]);
+
+  // Tick every 500ms
+  useEffect(() => {
+    if (phase !== 'lobby' || offlineRef.current) return;
+    const id = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((FORCE_CPU_MS - (Date.now() - lobbyStartTimeRef.current)) / 1000));
+      setLobbyCountdown(remaining);
+    }, 500);
+    return () => clearInterval(id);
+  }, [phase]);
 
   // ── Lobby controls ─────────────────────────────────────────
   const slots: Slot[] = (() => {
@@ -1119,8 +1139,18 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
               </div>
             )}
             {!offlineRef.current && (
-              <div style={{ fontSize: 11, color: '#9a8a60', textAlign: 'center', marginTop: 6 }}>
-                ※この画面で待機していると他のユーザーが自動でルームに入室してきます※
+              <div style={{ textAlign: 'center', marginTop: 8 }}>
+                <div style={{ fontSize: 12, color: '#9a8a60' }}>
+                  自動開始まで&nbsp;
+                  <span style={{
+                    color: lobbyCountdown <= 10 ? '#ff8060' : '#f0c040',
+                    fontWeight: 800, fontSize: 18,
+                  }}>{lobbyCountdown}</span>
+                  &nbsp;秒
+                </div>
+                <div style={{ fontSize: 11, color: '#7a6a50', marginTop: 4 }}>
+                  ※この画面で待機していると他のユーザーが自動でルームに入室してきます※
+                </div>
               </div>
             )}
           </Panel>
