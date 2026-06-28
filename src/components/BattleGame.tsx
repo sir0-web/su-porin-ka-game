@@ -1118,6 +1118,11 @@ export default function BattleGame({ onExit }: { onExit: () => void }) {
                 ※2人以上で開始できます。1分経過で空き枠は自動的にCPUになり開始します。
               </div>
             )}
+            {!offlineRef.current && (
+              <div style={{ fontSize: 11, color: '#9a8a60', textAlign: 'center', marginTop: 6 }}>
+                ※この画面で待機していると他のユーザーが自動でルームに入室してきます※
+              </div>
+            )}
           </Panel>
         </Overlay>
       )}
