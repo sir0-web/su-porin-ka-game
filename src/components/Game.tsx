@@ -2014,7 +2014,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
         // 知らない人 が初めて誕生した瞬間の演出
-        if (nextLevel === MAX_LEVEL) { gs.current.unknownCount++; triggerSecretFx(); }
+        if (nextLevel === MAX_LEVEL) {
+          gs.current.unknownCount++;
+          triggerSecretFx();
+          // "who are you ?" テキスト(2500ms後)に合わせてSEを再生
+          window.setTimeout(() => playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current), 2500);
+        }
       }
 
       const s = gs.current;
