@@ -74,8 +74,9 @@ interface BodyData {
   monsterId: number;
   createdAt: number;
   isMerging: boolean;
-  squashT?: number;   // start time of the landing squash (ms), 0/undefined = none
-  squashAmp?: number; // squash amplitude (0..~0.24), scaled by impact speed
+  squashT?: number;
+  squashAmp?: number;
+  mergedAt?: number;  // birth animation start time (set only on merge-spawned bodies)
 }
 type Phase = 'start' | 'playing' | 'gameover';
 interface GS {
@@ -84,13 +85,14 @@ interface GS {
   highScore: number;
   currentLevel: number;
   nextLevel: number;
+  nextNextLevel: number;  // one-step lookahead for NEXT NEXT display
   dropX: number;
   canDrop: boolean;
   gameOverFrames: number;
-  overLineFrames: number; // safety-net timer: frames with a body over the line
-  maxLevel: number;       // highest monster level reached this game
-  unknownCount: number;   // how many 知らない人 were created this game
-  mergeCounts: number[];  // per-level merge count for this game
+  overLineFrames: number;
+  maxLevel: number;
+  unknownCount: number;
+  mergeCounts: number[];
 }
 
 interface RankEntry { name: string; score: number; maxLevel: number; unknown?: number; mergeCounts?: number[]; player_id?: string; }
@@ -265,7 +267,13 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const [reportResult, setReportResult]     = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
-  const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
+  const pausedForModalRef   = useRef(false);
+  const [showTutorial, setShowTutorial] = useState(() => {
+    try { return !localStorage.getItem('sporinkaFirstPlay'); } catch { return false; }
+  });
+  const bgStarsRef = useRef<{ x: number; y: number; r: number; sp: number; ph: number }[]>([]);
+  const shakeRef   = useRef(0);   // game-over screen shake intensity
+  const goStartRef = useRef(0);   // timestamp when game over began (for score countdown)
   const [, setRankingTick]  = useState(0);
   const [playerNameInput, setPlayerNameInput] = useState('');
   const [sysNotif, setSysNotif] = useState<{ title: string; message: string; type: string } | null>(null);
@@ -279,6 +287,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     highScore: 0,
     currentLevel: 0,
     nextLevel: 1,
+    nextNextLevel: 2,
     dropX: CX,
     canDrop: false,
     gameOverFrames: 0,
@@ -565,7 +574,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     level: number,
     alpha = 1,
     angle = 0,
-    squash = 0, // world-vertical squash & stretch (+ = flattened/wider)
+    squash = 0,
+    mergedAt = 0, // birth animation: timestamp set on merge-spawned bodies
   ) => {
     const m    = MONSTERS[level];
     const r    = m.radius;
@@ -595,8 +605,17 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       const bcx = proc.cxh * s;
       const bcy = proc.cyh * s;
       ctx.translate(x, y);
-      // squash along world axes (wider + shorter on impact), then rotate
-      if (squash) ctx.scale(1 + squash, 1 - squash);
+      // birth-spring scale for newly merged bodies (overshoot → settle)
+      let bs = 1;
+      if (mergedAt) {
+        const age = Date.now() - mergedAt;
+        if (age < 400) {
+          const t = age / 400;
+          bs = t < 0.5 ? (t / 0.5) * 1.22 : 1.22 - 0.22 * ((t - 0.5) / 0.5);
+        }
+      }
+      if (squash) ctx.scale((1 + squash) * bs, (1 - squash) * bs);
+      else if (bs !== 1) ctx.scale(bs, bs);
       ctx.rotate(angle);
       ctx.drawImage(proc.canvas, -bcx, -bcy, dw, dh);
 
@@ -723,7 +742,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     }
     ctx.restore();
 
-    // 5. Edge vignette (darkens the corners of the opening)
+    // 5. Edge vignette
     const cy = (top0 + bot0) / 2;
     const vg = ctx.createRadialGradient(CX, cy, 40, CX, cy, GW * 0.82);
     vg.addColorStop(0,    'rgba(0,0,0,0)');
@@ -731,7 +750,49 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     vg.addColorStop(1,    'rgba(0,0,0,0.42)');
     ctx.fillStyle = vg;
     ctx.fillRect(GL, top0, GW, fh);
-  }, []);
+
+    // 6. Twinkling stars (lazy-init once)
+    if (bgStarsRef.current.length === 0) {
+      bgStarsRef.current = Array.from({ length: 38 }, () => ({
+        x: GL + Math.random() * GW,
+        y: top0 + Math.random() * fh,
+        r: 0.4 + Math.random() * 1.3,
+        sp: 0.5 + Math.random() * 2.0,
+        ph: Math.random() * Math.PI * 2,
+      }));
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of bgStarsRef.current) {
+      const tw = 0.15 + 0.85 * (0.5 + 0.5 * Math.sin(now * 0.001 * s.sp + s.ph));
+      ctx.globalAlpha = tw * 0.5;
+      ctx.fillStyle = '#c8d4ff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    // 7. Slow-rotating magic circle
+    {
+      const rot = (now * 0.00011) % (Math.PI * 2);
+      const mcR = GW * 0.31;
+      ctx.save();
+      ctx.translate(CX, cy);
+      ctx.globalAlpha = 0.05;
+      ctx.strokeStyle = '#8855ee';
+      ctx.lineWidth = 1;
+      ctx.rotate(rot);
+      ctx.beginPath(); ctx.arc(0, 0, mcR, 0, Math.PI * 2); ctx.stroke();
+      ctx.rotate(-rot * 2.5);
+      ctx.beginPath(); ctx.arc(0, 0, mcR * 0.6, 0, Math.PI * 2); ctx.stroke();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        ctx.globalAlpha = 0.07;
+        ctx.fillStyle = '#aa70ff';
+        ctx.fillRect(Math.cos(a) * mcR - 2, Math.sin(a) * mcR - 2, 4, 4);
+      }
+      ctx.restore();
+    }
+  }, [bgStarsRef]);
 
   // ── Walls ───────────────────────────────────────────────────
   const drawWalls = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -882,12 +943,28 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const nm  = MONSTERS[st.nextLevel];
     const nmr = Math.min(nm.radius, 28);
     const sc  = nmr / nm.radius;
-    const bob = Math.sin(Date.now() * 0.003) * 2.2; // gentle float
+    const bob = Math.sin(Date.now() * 0.003) * 2.2;
     ctx.save();
-    ctx.translate(nx + nw / 2, py + ph / 2 + 8 + bob);
+    ctx.translate(nx + nw / 2, py + ph * 0.42 + bob);
     ctx.scale(sc, sc);
     drawMonster(ctx, 0, 0, st.nextLevel, 0.9);
     ctx.restore();
+
+    // NEXT NEXT (small, below main NEXT)
+    {
+      const nn = MONSTERS[st.nextNextLevel];
+      const nnr = Math.min(nn.radius, 14);
+      const nnsc = nnr / nn.radius;
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillStyle = P.textDim;
+      ctx.font = 'bold 9px "Noto Sans JP", sans-serif';
+      ctx.fillText('NEXT+', nx + nw / 2, py + ph * 0.66);
+      ctx.translate(nx + nw / 2, py + ph * 0.83);
+      ctx.scale(nnsc, nnsc);
+      drawMonster(ctx, 0, 0, st.nextNextLevel, 0.75);
+      ctx.restore();
+    }
 
     // Name with a dark backing pill for legibility
     const nameShort = nm.name.length > 7 ? nm.name.slice(0, 6) + '…' : nm.name;
@@ -1007,6 +1084,23 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.scale(scn, scn);
     drawMonster(ctx, 0, 0, st.nextLevel, 0.95);
     ctx.restore();
+
+    // NEXT NEXT (tiny preview below)
+    {
+      const nn = MONSTERS[st.nextNextLevel];
+      const nnr = Math.min(nn.radius, 11);
+      const nnsc = nnr / nn.radius;
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = P.textDim;
+      ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
+      ctx.fillText('NEXT+', FA.nextX, FA.nextY + 28);
+      ctx.globalAlpha = 0.8;
+      ctx.translate(FA.nextX, FA.nextY + 41);
+      ctx.scale(nnsc, nnsc);
+      drawMonster(ctx, 0, 0, st.nextNextLevel, 0.8);
+      ctx.restore();
+    }
 
     // Bottom plates: BEST | SCORE | 最大進化
     ctx.save();
@@ -1777,11 +1871,15 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.font = '11px "Noto Sans JP", sans-serif';
     ctx.fillText(`${nm} の きろく`, CX, by + 52);
 
-    // Score
+    // Score — count-up animation for the first 1.4 s after game over
+    const goAge = goStartRef.current ? Date.now() - goStartRef.current : 99999;
+    const displayScore = goAge < 1400
+      ? Math.floor(st.score * Math.min(1, goAge / 1400))
+      : st.score;
     ctx.shadowColor = P.goldBrt; ctx.shadowBlur = 10;
     ctx.fillStyle = P.goldBrt;
     ctx.font = 'bold 38px "Oswald", "Arial Narrow", sans-serif';
-    ctx.fillText(String(st.score), CX, by + 70);
+    ctx.fillText(String(displayScore), CX, by + 70);
     ctx.shadowBlur = 0;
 
     const isNew = st.score > 0 && lastRankIdxRef.current === 0;
@@ -1863,7 +1961,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.shadowBlur = 0;
     ctx.fillStyle = P.textDim;
     ctx.font = '13px "Noto Sans JP", sans-serif';
-    ctx.fillText('ポーズボタンを押して再開', CX, H / 2 + 28);
+    ctx.fillText('ポーズボタンを押して再開', CX, H / 2 + 24);
+    ctx.font = '11px "Noto Sans JP", sans-serif';
+    ctx.fillStyle = 'rgba(160,130,200,0.75)';
+    ctx.fillText('🥚 ボタンで進化ルートを確認できます', CX, H / 2 + 50);
     ctx.restore();
   }, []);
 
@@ -1989,8 +2090,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       // Merge SE — richer the bigger the combo
       if (level === MAX_LEVEL) {
         playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current);
+        try { navigator.vibrate?.(50); } catch { /* */ }
       } else {
         playComboMerge(combo);
+        try { navigator.vibrate?.(combo >= 3 ? [30, 20, 30] : 25); } catch { /* */ }
       }
 
       // Light-orb burst at the merge point (colour = the new evolution)
@@ -2013,12 +2116,15 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           y: -2.5,
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
+        // birth animation marker
+        const bd = bodyDataRef.current.get(newBody.id);
+        if (bd) bd.mergedAt = Date.now();
         // 知らない人 が初めて誕生した瞬間の演出
         if (nextLevel === MAX_LEVEL) {
           gs.current.unknownCount++;
           triggerSecretFx();
-          // "who are you ?" テキスト(2500ms後)に合わせてSEを再生
           window.setTimeout(() => playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current), 2500);
+          try { navigator.vibrate?.([80, 30, 80]); } catch { /* */ }
         }
       }
 
@@ -2048,9 +2154,10 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     fallingIdRef.current = body.id;
     playFall();
 
-    st.currentLevel = st.nextLevel;
-    st.nextLevel    = getRandomStartLevel();
-    st.canDrop      = false;
+    st.currentLevel  = st.nextLevel;
+    st.nextLevel     = st.nextNextLevel;
+    st.nextNextLevel = getRandomStartLevel();
+    st.canDrop       = false;
     coolRef.current = Date.now() + DROP_COOLDOWN;
     setTimeout(() => { gs.current.canDrop = true; }, DROP_COOLDOWN);
   }, [spawnMonster, playFall]);
@@ -2108,6 +2215,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     st.highScore      = hs;
     st.currentLevel   = getRandomStartLevel();
     st.nextLevel      = getRandomStartLevel();
+    st.nextNextLevel  = getRandomStartLevel();
     st.dropX          = CX;
     st.canDrop        = true;
     st.gameOverFrames = 0;
@@ -2116,6 +2224,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     st.unknownCount   = 0;
     st.phase          = 'playing';
     coolRef.current   = 0;
+    shakeRef.current  = 0;
+    goStartRef.current = 0;
     secretFxRef.current = null;
     popupsRef.current = [];
     particlesRef.current = [];
@@ -2229,6 +2339,8 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           else s.overLineFrames = 0;
           if (s.gameOverFrames > 25 || s.overLineFrames > 200) {
             s.phase = 'gameover';
+            shakeRef.current = 9;
+            goStartRef.current = Date.now();
             stopFall();
             bgmRef.current?.pause();
             bgmPlayRef.current?.pause();             // stop the solo play BGM
@@ -2254,6 +2366,14 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       // Render
       ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      if (shakeRef.current > 0) {
+        ctx.translate(
+          (Math.random() - 0.5) * shakeRef.current,
+          (Math.random() - 0.5) * shakeRef.current,
+        );
+        shakeRef.current = Math.max(0, shakeRef.current - 0.6);
+      }
       const useFrame  = frameReadyRef.current  && frameImgRef.current;
       const useFrame2 = frame2ReadyRef.current && frame2ImgRef.current;
       drawBG(ctx);                 // dark veil/grid inside play field
@@ -2277,7 +2397,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           if (el < DUR) sq = (d.squashAmp ?? 0) * Math.cos(el * 26) * (1 - el / DUR);
           else d.squashT = 0;
         }
-        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle, sq);
+        drawMonster(ctx, b.position.x, b.position.y, d.monsterId, d.isMerging ? 0.5 : 1, b.angle, sq, d.mergedAt);
 
         // Red danger outline when the block reaches / nears the GAME
         // OVER line; released once it drops a bit below it.
@@ -2349,6 +2469,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         drawOptionIcon(ctx, OPT_SND.x, OPT_SND.y, soundOn ? '🔊' : '🔇', true);
       }
 
+      ctx.restore(); // shake transform
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -2552,6 +2673,15 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           height={H}
           style={{ display: 'block', width: W, height: H, maxWidth: 'none', cursor: 'crosshair', touchAction: 'none' }}
           onClick={(e) => handleClick(e.clientX, e.clientY)}
+          onTouchMove={(e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            const rect = canvasRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            gs.current.dropX = Math.max(GL + 5, Math.min(GR - 5,
+              (t.clientX - rect.left) / scaleRef.current
+            ));
+          }}
           onTouchEnd={(e) => {
             e.preventDefault();
             const t = e.changedTouches[0];
@@ -2561,6 +2691,51 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             handleClick(t.clientX, t.clientY);
           }}
         />
+        {/* 初回チュートリアル */}
+        {showTutorial && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'rgba(4,2,16,0.93)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            zIndex: 300, padding: 24, boxSizing: 'border-box',
+          }}>
+            <div style={{
+              background: 'linear-gradient(135deg,rgba(18,8,48,0.98),rgba(28,10,60,0.98))',
+              border: '1.5px solid rgba(200,160,48,0.7)',
+              borderRadius: 14, padding: '24px 20px', maxWidth: 320, width: '100%',
+              boxShadow: '0 0 40px rgba(140,60,255,0.25)',
+            }}>
+              <div style={{ textAlign: 'center', fontSize: 22, fontWeight: 900, color: '#ffd060', marginBottom: 14, fontFamily: '"Noto Sans JP", sans-serif' }}>
+                🎮 あそびかた
+              </div>
+              <div style={{ color: '#e0d0b0', fontSize: 13, lineHeight: 2, fontFamily: '"Noto Sans JP", sans-serif', marginBottom: 16 }}>
+                <div>👆 タップでモンスターを落とす</div>
+                <div>🔗 <strong style={{ color: '#ffd060' }}>同じモンスター同士</strong>をくっつけると合体！</div>
+                <div>⬆ 合体すると大きなモンスターに進化</div>
+                <div>⚠ DANGER LINEを超えたらゲームオーバー</div>
+                <div style={{ marginTop: 6, color: '#c090ff', fontSize: 11 }}>
+                  🎯 目指せ「知らない人」の召喚！
+                </div>
+              </div>
+              <button
+                style={{
+                  display: 'block', width: '100%', padding: '12px',
+                  background: 'linear-gradient(180deg,#3a18a0,#7030d0)',
+                  border: '1.5px solid #9060ff', borderRadius: 8,
+                  color: '#f0e0ff', fontSize: 15, fontWeight: 700,
+                  cursor: 'pointer', fontFamily: '"Noto Sans JP", sans-serif',
+                }}
+                onClick={() => {
+                  setShowTutorial(false);
+                  try { localStorage.setItem('sporinkaFirstPlay', '1'); } catch { /* */ }
+                }}
+              >
+                はじめる！
+              </button>
+            </div>
+          </div>
+        )}
         {/* Admin アナウンスバナー */}
         {sysNotif && (
           <div style={{
