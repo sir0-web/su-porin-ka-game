@@ -266,8 +266,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef         = useRef(false);
   const pausedForModalRef   = useRef(false); // auto-paused to show the in-game popup
-  const [showShiranaiVideo, setShowShiranaiVideo] = useState(false);
-  const cutsceneActiveRef   = useRef(false); // physics freeze during video cutscene
   const [, setRankingTick]  = useState(0);
   const [playerNameInput, setPlayerNameInput] = useState('');
   const [sysNotif, setSysNotif] = useState<{ title: string; message: string; type: string } | null>(null);
@@ -1287,14 +1285,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     secretFxRef.current = { start: Date.now(), sparkles };
   }, []);
 
-  // ── 知らない人カットシーン動画終了ハンドラ ──────────────────
-  const handleShiranaiVideoEnded = useCallback(() => {
-    setShowShiranaiVideo(false);
-    cutsceneActiveRef.current = false;
-    triggerSecretFx();
-    window.setTimeout(() => playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current), 2500);
-  }, [triggerSecretFx, playSe]);
-
   // ── Floating score / combo popups ──────────────────────────
   const drawPopups = useCallback((ctx: CanvasRenderingContext2D) => {
     const now = Date.now();
@@ -2023,11 +2013,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
           y: -2.5,
         });
         Matter.Body.setAngularVelocity(newBody, (Math.random() - 0.5) * 0.04);
-        // 知らない人 が初めて誕生した瞬間 — 動画カットシーンを開始
+        // 知らない人 が初めて誕生した瞬間の演出
         if (nextLevel === MAX_LEVEL) {
           gs.current.unknownCount++;
-          cutsceneActiveRef.current = true;
-          setShowShiranaiVideo(true);
+          triggerSecretFx();
+          // "who are you ?" テキスト(2500ms後)に合わせてSEを再生
+          window.setTimeout(() => playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current), 2500);
         }
       }
 
@@ -2037,7 +2028,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         try { localStorage.setItem('sporinkaHighScore', String(s.score)); } catch { /* */ }
       }
     }, 80);
-  }, [spawnMonster, playSe, playComboMerge, spawnBurst]);
+  }, [spawnMonster, triggerSecretFx, playSe, playComboMerge, spawnBurst]);
 
   // ── Drop current monster ────────────────────────────────────
   const drop = useCallback(() => {
@@ -2194,7 +2185,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       last = ts;
       const s = gs.current;
 
-      if (!isPausedRef.current && !cutsceneActiveRef.current) {
+      if (!isPausedRef.current) {
         Matter.Engine.update(engine, dt > 0 ? dt : 16);
 
         // Safety clamp: stop any body from "flying away" (runaway
@@ -2345,7 +2336,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         else drawGameOver(ctx, s);
       }
 
-      if (isPausedRef.current && !cutsceneActiveRef.current && s.phase === 'playing') drawPauseOverlay(ctx);
+      if (isPausedRef.current && s.phase === 'playing') drawPauseOverlay(ctx);
 
       // Option icons painted on top of everything (so they're tappable even
       // over the pause/gameover overlays). Taps are handled in handleClick.
@@ -2547,7 +2538,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
       if (inCircle(OPT_EGG)) { openEvolution(); return; }
       if (inCircle(OPT_PAUSE)) { togglePause(); return; }
       if (inCircle(OPT_SND)) { toggleSound(); return; }
-      if (isPausedRef.current || cutsceneActiveRef.current) return;
+      if (isPausedRef.current) return;  // don't drop while paused
       drop();
     }
   }, [initGame, drop, saveScreenshot, unlockAudio, goToTop, onBattle, openEvolution, togglePause]);
@@ -2570,23 +2561,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
             handleClick(t.clientX, t.clientY);
           }}
         />
-        {/* 知らない人カットシーン動画オーバーレイ */}
-        {showShiranaiVideo && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            background: 'rgba(4,2,12,0.88)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 200,
-          }}>
-            <video
-              src="/shiranaihito.mp4"
-              autoPlay
-              playsInline
-              onEnded={handleShiranaiVideoEnded}
-              style={{ maxWidth: '90%', maxHeight: '80%', borderRadius: 8 }}
-            />
-          </div>
-        )}
         {/* Admin アナウンスバナー */}
         {sysNotif && (
           <div style={{
