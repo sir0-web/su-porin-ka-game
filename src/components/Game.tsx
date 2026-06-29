@@ -85,7 +85,6 @@ interface GS {
   highScore: number;
   currentLevel: number;
   nextLevel: number;
-  nextNextLevel: number;  // one-step lookahead for NEXT NEXT display
   dropX: number;
   canDrop: boolean;
   gameOverFrames: number;
@@ -271,7 +270,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
   const [showTutorial, setShowTutorial] = useState(() => {
     try { return !localStorage.getItem('sporinkaFirstPlay'); } catch { return false; }
   });
-  const bgStarsRef = useRef<{ x: number; y: number; r: number; sp: number; ph: number }[]>([]);
   const shakeRef   = useRef(0);   // game-over screen shake intensity
   const goStartRef = useRef(0);   // timestamp when game over began (for score countdown)
   const [, setRankingTick]  = useState(0);
@@ -287,7 +285,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     highScore: 0,
     currentLevel: 0,
     nextLevel: 1,
-    nextNextLevel: 2,
     dropX: CX,
     canDrop: false,
     gameOverFrames: 0,
@@ -751,48 +748,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.fillStyle = vg;
     ctx.fillRect(GL, top0, GW, fh);
 
-    // 6. Twinkling stars (lazy-init once)
-    if (bgStarsRef.current.length === 0) {
-      bgStarsRef.current = Array.from({ length: 38 }, () => ({
-        x: GL + Math.random() * GW,
-        y: top0 + Math.random() * fh,
-        r: 0.4 + Math.random() * 1.3,
-        sp: 0.5 + Math.random() * 2.0,
-        ph: Math.random() * Math.PI * 2,
-      }));
-    }
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const s of bgStarsRef.current) {
-      const tw = 0.15 + 0.85 * (0.5 + 0.5 * Math.sin(now * 0.001 * s.sp + s.ph));
-      ctx.globalAlpha = tw * 0.5;
-      ctx.fillStyle = '#c8d4ff';
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
-
-    // 7. Slow-rotating magic circle
-    {
-      const rot = (now * 0.00011) % (Math.PI * 2);
-      const mcR = GW * 0.31;
-      ctx.save();
-      ctx.translate(CX, cy);
-      ctx.globalAlpha = 0.05;
-      ctx.strokeStyle = '#8855ee';
-      ctx.lineWidth = 1;
-      ctx.rotate(rot);
-      ctx.beginPath(); ctx.arc(0, 0, mcR, 0, Math.PI * 2); ctx.stroke();
-      ctx.rotate(-rot * 2.5);
-      ctx.beginPath(); ctx.arc(0, 0, mcR * 0.6, 0, Math.PI * 2); ctx.stroke();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        ctx.globalAlpha = 0.07;
-        ctx.fillStyle = '#aa70ff';
-        ctx.fillRect(Math.cos(a) * mcR - 2, Math.sin(a) * mcR - 2, 4, 4);
-      }
-      ctx.restore();
-    }
-  }, [bgStarsRef]);
+  }, []);
 
   // ── Walls ───────────────────────────────────────────────────
   const drawWalls = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -943,28 +899,12 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     const nm  = MONSTERS[st.nextLevel];
     const nmr = Math.min(nm.radius, 28);
     const sc  = nmr / nm.radius;
-    const bob = Math.sin(Date.now() * 0.003) * 2.2;
+    const bob = Math.sin(Date.now() * 0.003) * 2.2; // gentle float
     ctx.save();
-    ctx.translate(nx + nw / 2, py + ph * 0.42 + bob);
+    ctx.translate(nx + nw / 2, py + ph / 2 + 8 + bob);
     ctx.scale(sc, sc);
     drawMonster(ctx, 0, 0, st.nextLevel, 0.9);
     ctx.restore();
-
-    // NEXT NEXT (small, below main NEXT)
-    {
-      const nn = MONSTERS[st.nextNextLevel];
-      const nnr = Math.min(nn.radius, 14);
-      const nnsc = nnr / nn.radius;
-      ctx.save();
-      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      ctx.fillStyle = P.textDim;
-      ctx.font = 'bold 9px "Noto Sans JP", sans-serif';
-      ctx.fillText('NEXT+', nx + nw / 2, py + ph * 0.66);
-      ctx.translate(nx + nw / 2, py + ph * 0.83);
-      ctx.scale(nnsc, nnsc);
-      drawMonster(ctx, 0, 0, st.nextNextLevel, 0.75);
-      ctx.restore();
-    }
 
     // Name with a dark backing pill for legibility
     const nameShort = nm.name.length > 7 ? nm.name.slice(0, 6) + '…' : nm.name;
@@ -1084,23 +1024,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     ctx.scale(scn, scn);
     drawMonster(ctx, 0, 0, st.nextLevel, 0.95);
     ctx.restore();
-
-    // NEXT NEXT (tiny preview below)
-    {
-      const nn = MONSTERS[st.nextNextLevel];
-      const nnr = Math.min(nn.radius, 11);
-      const nnsc = nnr / nn.radius;
-      ctx.save();
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = P.textDim;
-      ctx.font = 'bold 8px "Noto Sans JP", sans-serif';
-      ctx.fillText('NEXT+', FA.nextX, FA.nextY + 28);
-      ctx.globalAlpha = 0.8;
-      ctx.translate(FA.nextX, FA.nextY + 41);
-      ctx.scale(nnsc, nnsc);
-      drawMonster(ctx, 0, 0, st.nextNextLevel, 0.8);
-      ctx.restore();
-    }
 
     // Bottom plates: BEST | SCORE | 最大進化
     ctx.save();
@@ -2154,10 +2077,9 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     fallingIdRef.current = body.id;
     playFall();
 
-    st.currentLevel  = st.nextLevel;
-    st.nextLevel     = st.nextNextLevel;
-    st.nextNextLevel = getRandomStartLevel();
-    st.canDrop       = false;
+    st.currentLevel = st.nextLevel;
+    st.nextLevel    = getRandomStartLevel();
+    st.canDrop      = false;
     coolRef.current = Date.now() + DROP_COOLDOWN;
     setTimeout(() => { gs.current.canDrop = true; }, DROP_COOLDOWN);
   }, [spawnMonster, playFall]);
@@ -2215,7 +2137,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     st.highScore      = hs;
     st.currentLevel   = getRandomStartLevel();
     st.nextLevel      = getRandomStartLevel();
-    st.nextNextLevel  = getRandomStartLevel();
     st.dropX          = CX;
     st.canDrop        = true;
     st.gameOverFrames = 0;
