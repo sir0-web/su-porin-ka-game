@@ -99,7 +99,7 @@ interface RankEntry { name: string; score: number; maxLevel: number; unknown?: n
 // Ranking label for an entry's max evolution. Players who reached 知らない人
 // get it revealed with the number of times they created it (e.g. 知らない人＋3).
 function rankEvoLabel(e: RankEntry): string {
-  if (e.maxLevel >= MAX_LEVEL) return e.unknown != null ? `知らない人＋${e.unknown}` : '知らない人';
+  if (e.maxLevel >= MAX_LEVEL) return (e.unknown != null && e.unknown > 0) ? `知らない人＋${e.unknown}` : '知らない人';
   return MONSTERS[e.maxLevel].name;
 }
 
@@ -1813,7 +1813,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
     // Max evolution reached — reveal 知らない人＋N if reached, else masked name
     ctx.fillStyle = st.maxLevel >= MAX_LEVEL ? '#d0b0ff' : P.textDim;
     ctx.font = '10px "Noto Sans JP", sans-serif';
-    const evoSelf = st.maxLevel >= MAX_LEVEL ? `知らない人＋${st.unknownCount}` : evoName(st.maxLevel);
+    const evoSelf = st.maxLevel >= MAX_LEVEL ? (st.unknownCount > 0 ? `知らない人＋${st.unknownCount}` : '知らない人') : evoName(st.maxLevel);
     ctx.fillText('最大進化: ' + evoSelf, CX, by + 138);
 
     // Divider
@@ -2031,6 +2031,7 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
 
       if (level === MAX_LEVEL) {
         // special merge: both vanish, no new body
+        gs.current.unknownCount++;
       } else {
         const nextLevel = level + 1;
         const newBody = spawnMonster(Matter, mx, Math.max(my, CEILING_Y + MONSTERS[nextLevel].radius), nextLevel);
@@ -2044,7 +2045,6 @@ export default function Game({ onBattle }: { onBattle?: () => void } = {}) {
         if (bd) bd.mergedAt = Date.now();
         // 知らない人 が初めて誕生した瞬間の演出
         if (nextLevel === MAX_LEVEL) {
-          gs.current.unknownCount++;
           triggerSecretFx();
           window.setTimeout(() => playSe('/se/shiranaihito.wav', 0.8, seShiranaihitoRef.current), 2500);
           try { navigator.vibrate?.([80, 30, 80]); } catch { /* */ }
